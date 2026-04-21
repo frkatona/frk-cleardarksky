@@ -325,6 +325,16 @@ function colorFor(rowId, parsed) {
   }
 }
 
+function qualityColor(score) {
+  if (score >= 90) return "#167345";
+  if (score >= 75) return "#2f8f46";
+  if (score >= 60) return "#88a83a";
+  if (score >= 45) return "#d59b2d";
+  if (score >= 30) return "#c56a32";
+  if (score >= 15) return "#b64233";
+  return "#7d2427";
+}
+
 function scoreFor(rowId, parsed) {
   switch (rowId) {
     case "cloud":
@@ -334,19 +344,21 @@ function scoreFor(rowId, parsed) {
       return scoreFromWords(parsed.value, {
         transparent: 100,
         "above average": 86,
-        average: 68,
         "below average": 42,
         poor: 20,
-        "too cloudy": 0
+        "too cloudy": 0,
+        cloudy: 8,
+        average: 68
       });
     case "seeing":
       return scoreFromWords(parsed.value, {
         excellent: 100,
         good: 84,
-        average: 66,
         poor: 38,
         bad: 18,
-        "too cloudy": 0
+        "too cloudy": 0,
+        cloudy: 8,
+        average: 66
       });
     case "darkness":
       return scoreDarkness(parsed.metrics);
@@ -364,38 +376,35 @@ function scoreFor(rowId, parsed) {
 }
 
 function cloudColor(value) {
-  const percent = cloudPercent(value);
-  if (percent <= 0) return "#123f7b";
-  if (percent <= 10) return "#1d5f9f";
-  if (percent <= 20) return "#2f78ba";
-  if (percent <= 30) return "#4d91cc";
-  if (percent <= 40) return "#70a9d7";
-  if (percent <= 50) return "#92bfdf";
-  if (percent <= 60) return "#acd3df";
-  if (percent <= 70) return "#c5dedc";
-  if (percent <= 80) return "#d4d7d9";
-  if (percent <= 90) return "#e8e8e8";
-  return "#fbfbfb";
+  return qualityColor(scoreCloud(value));
 }
 
 function transparencyColor(value) {
-  const lower = value.toLowerCase();
-  if (lower.includes("transparent")) return "#123f7b";
-  if (lower.includes("above")) return "#2c6cac";
-  if (lower.includes("average") && !lower.includes("below")) return "#63a3e3";
-  if (lower.includes("below")) return "#95d5d5";
-  if (lower.includes("poor")) return "#c7c7c7";
-  return "#f3f3f3";
+  return qualityColor(
+    scoreFromWords(value, {
+      transparent: 100,
+      "above average": 86,
+      "below average": 42,
+      poor: 20,
+      "too cloudy": 0,
+      cloudy: 8,
+      average: 68
+    })
+  );
 }
 
 function seeingColor(value) {
-  const lower = value.toLowerCase();
-  if (lower.includes("excellent")) return "#123f7b";
-  if (lower.includes("good")) return "#2c6cac";
-  if (lower.includes("average")) return "#63a3e3";
-  if (lower.includes("poor")) return "#95d5d5";
-  if (lower.includes("bad")) return "#c7c7c7";
-  return "#f3f3f3";
+  return qualityColor(
+    scoreFromWords(value, {
+      excellent: 100,
+      good: 84,
+      poor: 38,
+      bad: 18,
+      "too cloudy": 0,
+      cloudy: 8,
+      average: 66
+    })
+  );
 }
 
 function darknessColor(metrics) {
@@ -411,54 +420,19 @@ function darknessColor(metrics) {
 }
 
 function smokeColor(value) {
-  const amount = smokeAmount(value);
-  if (amount <= 0) return "#123f7b";
-  if (amount <= 2) return "#1d5f9f";
-  if (amount <= 5) return "#4d91cc";
-  if (amount <= 10) return "#79bfc8";
-  if (amount <= 20) return "#8ed0a4";
-  if (amount <= 40) return "#d28a73";
-  if (amount <= 60) return "#c45f54";
-  if (amount <= 80) return "#b93e35";
-  if (amount <= 100) return "#a82622";
-  if (amount <= 200) return "#71452d";
-  return "#382515";
+  return qualityColor(scoreSmoke(value));
 }
 
 function windColor(value) {
-  const wind = rangeAverage(value);
-  if (wind <= 5) return "#123f7b";
-  if (wind <= 11) return "#2c6cac";
-  if (wind <= 16) return "#63a3e3";
-  if (wind <= 28) return "#95d5d5";
-  if (wind <= 45) return "#c7c7c7";
-  return "#f3f3f3";
+  return qualityColor(scoreWind(value));
 }
 
 function humidityColor(value) {
-  const humidity = rangeAverage(value);
-  if (humidity < 30) return "#173b84";
-  if (humidity < 40) return "#2f78ba";
-  if (humidity < 50) return "#70a9d7";
-  if (humidity < 60) return "#43caa0";
-  if (humidity < 70) return "#b7db4b";
-  if (humidity < 80) return "#e6b43a";
-  if (humidity < 90) return "#d55a3e";
-  return "#a72626";
+  return qualityColor(scoreHumidity(value));
 }
 
 function temperatureColor(value) {
-  const temp = rangeAverage(value);
-  if (temp < 10) return "#0d2f85";
-  if (temp < 23) return "#0077c8";
-  if (temp < 32) return "#39bcd6";
-  if (temp < 41) return "#56c487";
-  if (temp < 50) return "#9bc95c";
-  if (temp < 59) return "#e1bf3c";
-  if (temp < 68) return "#e68f35";
-  if (temp < 77) return "#dc6135";
-  if (temp < 86) return "#c53b32";
-  return "#982525";
+  return qualityColor(scoreTemperature(value));
 }
 
 function scoreCloud(value) {
@@ -544,8 +518,10 @@ function scoreFromWords(value, table) {
 
 function readableTextColor(hex) {
   const [red, green, blue] = hexToRgb(hex);
-  const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
-  return luminance > 0.62 ? "#151515" : "#fffaf2";
+  const luminance = relativeLuminance(red, green, blue);
+  const blackContrast = (luminance + 0.05) / 0.05;
+  const whiteContrast = 1.05 / (luminance + 0.05);
+  return blackContrast >= whiteContrast ? "#151515" : "#fffaf2";
 }
 
 function hexToRgb(hex) {
@@ -555,6 +531,14 @@ function hexToRgb(hex) {
     Number.parseInt(value.slice(2, 4), 16),
     Number.parseInt(value.slice(4, 6), 16)
   ];
+}
+
+function relativeLuminance(red, green, blue) {
+  const [r, g, b] = [red, green, blue].map((channel) => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
 function getBaseDate(lastUpdated) {

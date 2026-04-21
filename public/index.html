@@ -29,7 +29,31 @@
       </header>
 
       <main>
-        <section class="summary-grid" id="summaryGrid" aria-live="polite">
+        <section class="weather-hero" id="weatherHero" aria-live="polite">
+          <div class="hero-primary">
+            <div class="hero-icon" id="heroIcon"></div>
+            <div>
+              <p class="hero-location">State College</p>
+              <p class="hero-condition" id="heroCondition">Loading forecast...</p>
+            </div>
+          </div>
+          <div class="hero-score">
+            <p class="score-number" id="heroScore">--</p>
+            <p class="score-label">observing score</p>
+          </div>
+          <p class="hero-meta" id="heroMeta">Pulling chart data from Clear Dark Sky.</p>
+          <div class="hero-night-scores" id="heroNightScores" aria-label="Night score forecast"></div>
+        </section>
+
+        <section class="hourly-panel" aria-label="Hourly forecast">
+          <div class="section-heading">
+            <h2>Hourly</h2>
+            <p id="hourlySummary"></p>
+          </div>
+          <div class="hourly-strip" id="hourlyStrip"></div>
+        </section>
+
+        <section class="summary-grid" id="summaryGrid" aria-label="Observing details">
           <article class="summary-card loading"></article>
           <article class="summary-card loading"></article>
           <article class="summary-card loading"></article>
@@ -37,14 +61,27 @@
         </section>
 
         <section class="toolbar" aria-label="Forecast controls">
-          <div class="segmented-control" role="group" aria-label="Visible hours">
-            <button class="segment is-active" type="button" data-mode="all">All</button>
-            <button class="segment" type="button" data-mode="night">Night</button>
+          <div class="control-cluster">
+            <div class="segmented-control" role="group" aria-label="Visible hours">
+              <button class="segment is-active" type="button" data-mode="all">All</button>
+              <button class="segment" type="button" data-mode="night">Night</button>
+            </div>
+            <label class="switch-control" for="graphToggle">
+              <input id="graphToggle" type="checkbox">
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
+              <span class="switch-text">Graphs</span>
+            </label>
           </div>
           <p class="status-text" id="statusText">Fetching latest chart data...</p>
         </section>
 
         <section class="forecast-panel" aria-label="Forecast grid">
+          <div class="section-heading forecast-heading">
+            <h2>Astronomy Chart</h2>
+            <p>Color shows observing quality; hover or focus cells for source values.</p>
+          </div>
           <div class="forecast-scroll" id="forecastScroll">
             <div class="forecast-grid" id="forecastGrid"></div>
           </div>

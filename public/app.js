@@ -1,6 +1,7 @@
 const state = {
   forecast: null,
-  mode: "all"
+  mode: "all",
+  graphMode: new URLSearchParams(window.location.search).get("graphs") === "1"
 };
 
 const elements = {
@@ -8,7 +9,16 @@ const elements = {
   sourceLine: document.querySelector("#sourceLine"),
   sourceLink: document.querySelector("#sourceLink"),
   refreshButton: document.querySelector("#refreshButton"),
+  graphToggle: document.querySelector("#graphToggle"),
   statusText: document.querySelector("#statusText"),
+  weatherHero: document.querySelector("#weatherHero"),
+  heroIcon: document.querySelector("#heroIcon"),
+  heroCondition: document.querySelector("#heroCondition"),
+  heroScore: document.querySelector("#heroScore"),
+  heroMeta: document.querySelector("#heroMeta"),
+  heroNightScores: document.querySelector("#heroNightScores"),
+  hourlyStrip: document.querySelector("#hourlyStrip"),
+  hourlySummary: document.querySelector("#hourlySummary"),
   summaryGrid: document.querySelector("#summaryGrid"),
   forecastGrid: document.querySelector("#forecastGrid"),
   darknessTrack: document.querySelector("#darknessTrack"),
@@ -40,8 +50,17 @@ document.querySelectorAll(".segment").forEach((button) => {
   });
 });
 
+elements.graphToggle.checked = state.graphMode;
+syncGraphToggle();
+
 elements.refreshButton.addEventListener("click", () => {
   loadForecast(true);
+});
+
+elements.graphToggle.addEventListener("change", () => {
+  state.graphMode = elements.graphToggle.checked;
+  syncGraphToggle();
+  renderForecast();
 });
 
 loadForecast(false);
@@ -80,6 +99,8 @@ function render() {
     elements.originalChartLink.href = forecast.image.src;
   }
 
+  renderHero();
+  renderHourly();
   renderSummary();
   renderForecast();
   renderDarkness();
@@ -88,41 +109,308 @@ function render() {
 }
 
 function renderSummary() {
-  const forecast = state.forecast;
-  const rows = indexRows(forecast.rows);
-  const best = findBestWindow(forecast, rows);
-  const nextDark = firstDarkSlot(forecast, rows);
-  const bestEntries = best?.best ? entriesAtKey(rows, best.best.key) : {};
-  const nextEntries = nextDark ? entriesAtKey(rows, nextDark.key) : {};
+  const { best, bestEntries, nextEntries } = observingContext();
   const cloud = bestEntries.cloud || nextEntries.cloud;
   const trans = bestEntries.transparency || nextEntries.transparency;
   const seeing = bestEntries.seeing || nextEntries.seeing;
+  const smoke = bestEntries.smoke || nextEntries.smoke;
   const dew = dewRisk(bestEntries.humidity || nextEntries.humidity, bestEntries.wind || nextEntries.wind);
 
   const cards = [
     {
+      icon: "sparkles",
       kicker: "Best Window",
-      value: best ? formatWindow(best) : "No dark window",
-      meta: best ? `Composite score ${Math.round(best.best.score)} from pulled forecast blocks.` : "Darkness data is unavailable."
+      value: best ? formatCompactWindow(best) : "No dark window",
+      meta: best ? `${Math.round(best.best.score)} / 100 composite score` : "Darkness data is unavailable."
     },
     {
+      icon: "cloud",
       kicker: "Cloud",
       value: cloud?.value || "Unavailable",
       meta: cloud ? formatSlot(cloud) : "No cloud block matched the next dark hour."
     },
     {
-      kicker: "Transparency / Seeing",
+      icon: "eye",
+      kicker: "Clarity / Seeing",
       value: [trans?.value, seeing?.value].filter(Boolean).join(" / ") || "Unavailable",
       meta: trans || seeing ? formatSlot(trans || seeing) : "No matching transparency or seeing block."
     },
     {
-      kicker: "Dew Risk",
-      value: dew.label,
+      icon: smoke && /no smoke/i.test(smoke.value) ? "sparkles" : "smoke",
+      kicker: "Smoke / Dew",
+      value: [smoke?.value, dew.label].filter(Boolean).join(" / ") || "Unavailable",
       meta: dew.detail
     }
   ];
 
   elements.summaryGrid.replaceChildren(...cards.map(summaryCard));
+}
+
+function renderHero() {
+  const { best, bestEntries, nextEntries } = observingContext();
+  const cloud = bestEntries.cloud || nextEntries.cloud;
+  const trans = bestEntries.transparency || nextEntries.transparency;
+  const seeing = bestEntries.seeing || nextEntries.seeing;
+  const score = best ? Math.round(best.best.score) : null;
+  const quality = score === null ? "unknown" : score >= 75 ? "good" : score >= 50 ? "mixed" : "poor";
+
+  elements.weatherHero.dataset.quality = quality;
+  elements.heroIcon.replaceChildren();
+  if (cloud) {
+    elements.heroIcon.appendChild(valueIcon(valuePresentation({ id: "cloud" }, cloud).icon));
+  }
+
+  elements.heroCondition.textContent = cloud
+    ? `${cloud.value}${trans ? `, ${trans.value.toLowerCase()} transparency` : ""}`
+    : "Forecast unavailable";
+  elements.heroScore.textContent = score === null ? "--" : String(score);
+  elements.heroMeta.textContent = [
+    best ? `Best observing: ${formatWindow(best)}` : null,
+    seeing ? `Seeing ${seeing.value}` : null
+  ]
+    .filter(Boolean)
+    .join(" | ");
+  renderHeroNightScores();
+}
+
+function renderHeroNightScores() {
+  const forecast = state.forecast;
+  const rows = indexRows(forecast.rows);
+  const groups = nightScoreGroups(forecast, rows);
+
+  if (!groups.length) {
+    elements.heroNightScores.replaceChildren();
+    return;
+  }
+
+  const heading = document.createElement("div");
+  heading.className = "hero-night-heading has-tooltip";
+  heading.dataset.tooltip = compositeScoreTooltip();
+  heading.title = heading.dataset.tooltip;
+  const title = document.createElement("p");
+  title.textContent = "Night scores";
+  const range = document.createElement("p");
+  range.textContent = `Higher is better | ${groups.length} ${groups.length === 1 ? "night" : "nights"}`;
+  heading.append(title, range);
+
+  const strip = document.createElement("div");
+  strip.className = "hero-night-strip";
+  const highestPeak = Math.max(...groups.map((slots) => maxNightScore(slots)));
+  strip.replaceChildren(...groups.map((slots) => nightScoreCard(slots, highestPeak)));
+
+  elements.heroNightScores.replaceChildren(heading, strip);
+}
+
+function nightScoreGroups(forecast, rows) {
+  const nightSlots = forecast.timeSlots
+    .filter((slot) => isNightSlot(slot, forecast.rows))
+    .map((slot) => ({
+      ...slot,
+      score: Math.round(scoreForSlot(slot, forecast, rows))
+    }));
+
+  const groups = [];
+  let current = [];
+
+  nightSlots.forEach((slot) => {
+    const previous = current[current.length - 1];
+    if (previous && !isAdjacentHour(previous, slot)) {
+      groups.push(current);
+      current = [];
+    }
+    current.push(slot);
+  });
+
+  if (current.length) groups.push(current);
+  return groups;
+}
+
+function nightScoreCard(slots, highestPeak) {
+  const card = document.createElement("article");
+  card.className = "night-score-card has-tooltip";
+  card.tabIndex = 0;
+  card.dataset.tooltip = compositeScoreTooltip();
+  card.title = card.dataset.tooltip;
+  const peak = slots.slice().sort((left, right) => right.score - left.score)[0];
+  card.classList.toggle("is-best", peak.score === highestPeak);
+
+  const header = document.createElement("div");
+  header.className = "night-score-header";
+  const label = document.createElement("p");
+  label.className = "night-score-label";
+  label.textContent = nightLabel(slots);
+  const value = document.createElement("p");
+  value.className = "night-score-peak";
+  value.textContent = String(peak.score);
+  header.append(label, value);
+
+  const svg = nightScoreSvg(slots);
+  const axis = document.createElement("div");
+  axis.className = "night-score-axis";
+  ["100", "50", "0"].forEach((tick) => {
+    const label = document.createElement("span");
+    label.textContent = tick;
+    axis.appendChild(label);
+  });
+
+  const plot = document.createElement("div");
+  plot.className = "night-score-plot";
+  plot.append(axis, svg);
+
+  const times = document.createElement("div");
+  times.className = "night-score-times";
+  const start = document.createElement("span");
+  start.textContent = slots[0].time;
+  const end = document.createElement("span");
+  end.textContent = slots[slots.length - 1].time;
+  times.append(start, end);
+
+  card.append(header, plot, times);
+  return card;
+}
+
+function nightScoreSvg(slots) {
+  const width = Math.max(180, slots.length * 26);
+  const height = 74;
+  const top = 14;
+  const bottom = 58;
+  const xFor = (index) => (slots.length === 1 ? width / 2 : 12 + (index * (width - 24)) / (slots.length - 1));
+  const yFor = (score) => bottom - (Math.max(0, Math.min(100, score)) / 100) * (bottom - top);
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "night-score-svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+
+  [0, 50, 100].forEach((score) => {
+    const guide = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    guide.setAttribute("class", "night-score-guide");
+    guide.setAttribute("x1", "0");
+    guide.setAttribute("x2", String(width));
+    guide.setAttribute("y1", String(yFor(score)));
+    guide.setAttribute("y2", String(yFor(score)));
+    svg.appendChild(guide);
+  });
+
+  const pointPairs = slots.map((slot, index) => [xFor(index), yFor(slot.score)]);
+  if (pointPairs.length > 1) {
+    const area = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    area.setAttribute("class", "night-score-area");
+    area.setAttribute(
+      "d",
+      `${pathFromPoints(pointPairs)} L ${pointPairs[pointPairs.length - 1][0].toFixed(2)} ${bottom} L ${pointPairs[0][0].toFixed(2)} ${bottom} Z`
+    );
+    svg.appendChild(area);
+
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    line.setAttribute("class", "night-score-line");
+    line.setAttribute("d", pathFromPoints(pointPairs));
+    svg.appendChild(line);
+  }
+
+  const peakScore = maxNightScore(slots);
+  slots.forEach((slot, index) => {
+    if (slot.score !== peakScore) return;
+
+    const x = xFor(index);
+    const y = yFor(slot.score);
+    const peakLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    peakLine.setAttribute("class", "night-score-peak-line");
+    peakLine.setAttribute("x1", String(x));
+    peakLine.setAttribute("x2", String(x));
+    peakLine.setAttribute("y1", String(top));
+    peakLine.setAttribute("y2", String(bottom));
+    svg.appendChild(peakLine);
+
+    const peakTime = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    peakTime.setAttribute("class", "night-score-peak-time");
+    peakTime.setAttribute("x", String(x));
+    peakTime.setAttribute("y", String(Math.max(9, y - 6)));
+    peakTime.textContent = slot.time;
+    svg.appendChild(peakTime);
+  });
+
+  slots.forEach((slot, index) => {
+    const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    dot.setAttribute("class", slot.score === peakScore ? "night-score-dot is-peak" : "night-score-dot");
+    dot.setAttribute("cx", String(xFor(index)));
+    dot.setAttribute("cy", String(yFor(slot.score)));
+    dot.setAttribute("r", slot.score === peakScore ? "4.5" : "3.6");
+    appendSvgTitle(dot, `${formatSlot(slot)}: ${slot.score}`);
+    svg.appendChild(dot);
+  });
+
+  return svg;
+}
+
+function maxNightScore(slots) {
+  return Math.max(...slots.map((slot) => slot.score));
+}
+
+function compositeScoreTooltip() {
+  return "Composite score weights: cloud cover 28%, ECMWF cloud 14%, transparency 20%, seeing 16%, darkness 12%, smoke 4%, wind 4%, humidity 2%. Higher is better.";
+}
+
+function nightLabel(slots) {
+  const start = slots[0];
+  const end = slots[slots.length - 1];
+  if (start.date === end.date) return `${formatShortDate(start.date)} night`;
+  return `${formatShortDate(start.date)}-${formatShortDate(end.date)}`;
+}
+
+function renderHourly() {
+  const forecast = state.forecast;
+  const rows = indexRows(forecast.rows);
+  const cloudRow = forecast.rows.find((row) => row.id === "cloud");
+  const visibleSlots = forecast.timeSlots.slice(0, 30);
+  const cards = visibleSlots.map((slot) => {
+    const entries = entriesAtKey(rows, slot.key);
+    const cloud = entries.cloud;
+    const temperature = entries.temperature;
+    const humidity = entries.humidity;
+    const score = Math.round(scoreForSlot(slot, forecast, rows));
+    const card = document.createElement("article");
+    card.className = "hour-card has-tooltip";
+    card.tabIndex = 0;
+    card.dataset.tooltip = [
+      formatSlot(slot),
+      cloud ? `Cloud ${cloud.value}` : null,
+      entries.transparency ? `Transparency ${entries.transparency.value}` : null,
+      entries.seeing ? `Seeing ${entries.seeing.value}` : null
+    ]
+      .filter(Boolean)
+      .join(". ");
+    card.title = card.dataset.tooltip;
+
+    const time = document.createElement("p");
+    time.className = "hour-time";
+    time.textContent = slot.time;
+
+    const iconWrap = document.createElement("div");
+    iconWrap.className = "hour-icon";
+    if (cloud && cloudRow) {
+      iconWrap.appendChild(valueIcon(valuePresentation(cloudRow, cloud).icon));
+    }
+
+    const value = document.createElement("p");
+    value.className = "hour-value";
+    value.textContent = cloud ? shortCloudValue(cloud.value) : "--";
+
+    const meta = document.createElement("p");
+    meta.className = "hour-meta";
+    meta.textContent = temperature ? compactRange(temperature.value, "F") : humidity ? compactRange(humidity.value, "%") : `${score}`;
+
+    const bar = document.createElement("span");
+    bar.className = "hour-score";
+    bar.style.setProperty("--score", `${score}%`);
+
+    card.append(time, iconWrap, value, meta, bar);
+    return card;
+  });
+
+  const best = findBestWindow(forecast, rows);
+  elements.hourlySummary.textContent = best ? `Peak ${Math.round(best.best.score)} near ${formatSlot(best.best.slot)}.` : "";
+  elements.hourlyStrip.replaceChildren(...cards);
 }
 
 function renderForecast() {
@@ -156,22 +444,41 @@ function renderForecast() {
 
   rows.forEach((row) => {
     const rowLabel = gridCell("row-label", "");
+    rowLabel.appendChild(rowLabelIcon(row));
     const label = document.createElement("span");
     label.textContent = row.label;
-    const cadence = document.createElement("span");
-    cadence.className = "row-cadence";
-    cadence.textContent = row.cadence;
-    rowLabel.append(label, cadence);
+    rowLabel.appendChild(label);
     fragment.appendChild(rowLabel);
 
     const byKey = new Map(row.entries.map((entry) => [entry.key, entry]));
-    visibleSlots.forEach((slot) => {
-      const entry = byKey.get(slot.key);
-      fragment.appendChild(entry ? forecastCell(entry) : emptyCell());
-    });
+    if (state.graphMode && isGraphableRow(row)) {
+      fragment.appendChild(graphCell(row, visibleSlots, byKey));
+    } else {
+      visibleSlots.forEach((slot) => {
+        const entry = byKey.get(slot.key);
+        fragment.appendChild(entry ? forecastCell(entry, row) : emptyCell());
+      });
+    }
   });
 
   elements.forecastGrid.replaceChildren(fragment);
+}
+
+function rowLabelIcon(row) {
+  const iconMap = {
+    cloud: "cloud",
+    ecmwfCloud: "cloud",
+    transparency: "eye",
+    seeing: "waves",
+    smoke: "flame",
+    wind: "wind",
+    humidity: "droplet",
+    temperature: "thermometer"
+  };
+  const wrapper = document.createElement("span");
+  wrapper.className = "row-label-icon";
+  wrapper.appendChild(valueIcon(iconMap[row.id] || "circle"));
+  return wrapper;
 }
 
 function renderDarkness() {
@@ -232,11 +539,15 @@ function renderLegend() {
     });
 
     unique.slice(0, 18).forEach((entry) => {
+      const value = valuePresentation(row, entry);
       const chip = document.createElement("span");
-      chip.className = "legend-chip";
+      chip.className = "legend-chip has-tooltip";
       chip.style.setProperty("--cell-bg", entry.color);
       chip.style.setProperty("--cell-color", entry.textColor);
-      chip.textContent = entry.value;
+      chip.dataset.tooltip = tooltipForEntry(row, entry, value);
+      chip.title = chip.dataset.tooltip;
+      chip.setAttribute("aria-label", `${row.label}: ${entry.value}`);
+      chip.appendChild(valueDisplay(value));
       chips.appendChild(chip);
     });
 
@@ -247,17 +558,19 @@ function renderLegend() {
   elements.legendGrid.replaceChildren(...groups);
 }
 
-function forecastCell(entry) {
+function forecastCell(entry, row) {
   const wrapper = document.createElement("div");
   wrapper.className = "forecast-cell";
+  const value = valuePresentation(row, entry);
 
   const content = document.createElement(entry.href ? "a" : "span");
-  content.className = "cell-link";
+  content.className = "cell-link has-tooltip";
   content.style.setProperty("--cell-bg", entry.color);
   content.style.setProperty("--cell-color", entry.textColor);
-  content.textContent = shortValue(entry);
-  content.title = `${formatSlot(entry)} | ${entry.details}`;
-  content.setAttribute("aria-label", `${entry.title}`);
+  content.dataset.tooltip = tooltipForEntry(row, entry, value);
+  content.title = content.dataset.tooltip;
+  content.setAttribute("aria-label", `${row.label}: ${entry.title}`);
+  content.appendChild(valueDisplay(value));
 
   if (entry.href) {
     content.href = entry.href;
@@ -267,6 +580,470 @@ function forecastCell(entry) {
 
   wrapper.appendChild(content);
   return wrapper;
+}
+
+const graphableRows = new Set(["cloud", "ecmwfCloud", "seeing", "smoke", "wind", "humidity", "temperature"]);
+
+function isGraphableRow(row) {
+  return graphableRows.has(row.id);
+}
+
+function graphCell(row, visibleSlots, byKey) {
+  const cell = document.createElement("div");
+  cell.className = "forecast-graph-cell";
+  cell.style.gridColumn = `span ${Math.max(visibleSlots.length, 1)}`;
+
+  const points = visibleSlots.map((slot, index) => {
+    const entry = byKey.get(slot.key);
+    const graphValue = entry ? graphValueFor(row.id, entry) : null;
+    return {
+      index,
+      slot,
+      entry,
+      ...graphValue
+    };
+  });
+
+  const usablePoints = points.filter((point) => point && Number.isFinite(point.value));
+  if (!usablePoints.length) {
+    cell.classList.add("is-empty");
+    return cell;
+  }
+
+  const domain = graphDomain(row.id, usablePoints);
+  const width = visibleSlots.length * 100;
+  const height = 96;
+  const top = 14;
+  const bottom = 78;
+  const yFor = (value) => {
+    const clamped = Math.min(domain.max, Math.max(domain.min, value));
+    const ratio = (clamped - domain.min) / (domain.max - domain.min || 1);
+    return bottom - ratio * (bottom - top);
+  };
+  const xFor = (index) => index * 100 + 50;
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "forecast-graph");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("aria-label", `${row.label} graph`);
+
+  const baseline = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  baseline.setAttribute("class", "graph-baseline");
+  baseline.setAttribute("x1", "0");
+  baseline.setAttribute("x2", String(width));
+  baseline.setAttribute("y1", String(bottom));
+  baseline.setAttribute("y2", String(bottom));
+  svg.appendChild(baseline);
+
+  usablePoints.forEach((point) => {
+    const x = xFor(point.index);
+    if (point.isRange) {
+      const bar = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      bar.setAttribute("class", "graph-range");
+      bar.setAttribute("x1", String(x));
+      bar.setAttribute("x2", String(x));
+      bar.setAttribute("y1", String(yFor(point.max)));
+      bar.setAttribute("y2", String(yFor(point.min)));
+      appendSvgTitle(bar, graphTooltip(row, point));
+      svg.appendChild(bar);
+    }
+  });
+
+  const segments = graphPathSegments(usablePoints, xFor, yFor);
+  segments.forEach((segment) => {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("class", "graph-line");
+    path.setAttribute("d", segment);
+    svg.appendChild(path);
+  });
+
+  usablePoints.forEach((point) => {
+    const marker = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    marker.setAttribute("class", point.isRange ? "graph-marker is-range" : "graph-marker");
+    marker.setAttribute("cx", String(xFor(point.index)));
+    marker.setAttribute("cy", String(yFor(point.value)));
+    marker.setAttribute("r", point.isRange ? "3.1" : "3.8");
+    appendSvgTitle(marker, graphTooltip(row, point));
+    svg.appendChild(marker);
+  });
+
+  const scale = document.createElement("div");
+  scale.className = "graph-scale";
+  const high = document.createElement("span");
+  high.textContent = formatGraphValue(row.id, domain.max);
+  const low = document.createElement("span");
+  low.textContent = formatGraphValue(row.id, domain.min);
+  scale.append(high, low);
+
+  cell.append(svg, scale);
+  return cell;
+}
+
+function graphValueFor(rowId, entry) {
+  switch (rowId) {
+    case "cloud":
+    case "ecmwfCloud": {
+      const value = percentFromText(entry.value);
+      return Number.isFinite(value) ? exactGraphValue(value) : null;
+    }
+    case "seeing": {
+      const rating = Number(entry.value.match(/(\d)\/5/)?.[1]);
+      return Number.isFinite(rating) ? exactGraphValue(rating) : null;
+    }
+    case "smoke": {
+      if (/no smoke/i.test(entry.value)) return exactGraphValue(0);
+      const amount = Number(entry.value.match(/\d+(?:\.\d+)?/)?.[0]);
+      return Number.isFinite(amount) ? exactGraphValue(amount) : null;
+    }
+    case "wind":
+    case "humidity":
+    case "temperature":
+      return rangeGraphValue(entry.value);
+    default:
+      return null;
+  }
+}
+
+function exactGraphValue(value) {
+  return {
+    min: value,
+    max: value,
+    value,
+    isRange: false
+  };
+}
+
+function rangeGraphValue(value) {
+  const clean = String(value).replace(/\s+/g, " ").trim();
+  const numbers = [...clean.matchAll(/-?\d+(?:\.\d+)?/g)].map((match) => Number(match[0]));
+  if (!numbers.length) return null;
+
+  if (/^>/.test(clean)) {
+    return {
+      min: numbers[0],
+      max: numbers[0] + Math.max(5, Math.abs(numbers[0]) * 0.12),
+      value: numbers[0],
+      isRange: true
+    };
+  }
+
+  if (/^</.test(clean)) {
+    return {
+      min: numbers[0] - Math.max(5, Math.abs(numbers[0]) * 0.12),
+      max: numbers[0],
+      value: numbers[0],
+      isRange: true
+    };
+  }
+
+  if (numbers.length >= 2) {
+    const [min, max] = [Math.min(numbers[0], numbers[1]), Math.max(numbers[0], numbers[1])];
+    return {
+      min,
+      max,
+      value: (min + max) / 2,
+      isRange: true
+    };
+  }
+
+  return exactGraphValue(numbers[0]);
+}
+
+function graphDomain(rowId, points) {
+  if (rowId === "cloud" || rowId === "ecmwfCloud") return { min: 0, max: 100 };
+  if (rowId === "seeing") return { min: 1, max: 5 };
+  if (rowId === "humidity") return { min: 0, max: 100 };
+
+  const lows = points.map((point) => point.min);
+  const highs = points.map((point) => point.max);
+  let min = Math.min(...lows);
+  let max = Math.max(...highs);
+
+  if (rowId === "smoke" || rowId === "wind") {
+    min = 0;
+    max = Math.max(rowId === "smoke" ? 10 : 20, max);
+  }
+
+  if (rowId === "temperature") {
+    min = Math.floor(min / 10) * 10;
+    max = Math.ceil(max / 10) * 10;
+  }
+
+  if (min === max) {
+    min -= 1;
+    max += 1;
+  }
+
+  return { min, max };
+}
+
+function graphPathSegments(points, xFor, yFor) {
+  const segments = [];
+  let current = [];
+
+  points.forEach((point, sequenceIndex) => {
+    if (sequenceIndex > 0 && point.index - points[sequenceIndex - 1].index > 1) {
+      if (current.length > 1) segments.push(pathFromPoints(current));
+      current = [];
+    }
+    current.push([xFor(point.index), yFor(point.value)]);
+  });
+
+  if (current.length > 1) segments.push(pathFromPoints(current));
+  return segments;
+}
+
+function pathFromPoints(points) {
+  return points.map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`).join(" ");
+}
+
+function appendSvgTitle(node, text) {
+  const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+  title.textContent = text;
+  node.appendChild(title);
+}
+
+function graphTooltip(row, point) {
+  const range = point.isRange ? `${formatGraphValue(row.id, point.min)} to ${formatGraphValue(row.id, point.max)}` : formatGraphValue(row.id, point.value);
+  return `${row.label}: ${range}. ${point.entry.value}. ${formatSlot(point.slot)}.`;
+}
+
+function formatGraphValue(rowId, value) {
+  if (rowId === "cloud" || rowId === "ecmwfCloud" || rowId === "humidity") {
+    return `${Math.round(value)}%`;
+  }
+  if (rowId === "seeing") return `${Math.round(value)}/5`;
+  if (rowId === "wind") return `${Math.round(value)} mph`;
+  if (rowId === "temperature") return `${Math.round(value)}F`;
+  if (rowId === "smoke") return `${Math.round(value)} ug`;
+  return String(Math.round(value));
+}
+
+function valueDisplay(value) {
+  const display = document.createElement("span");
+  display.className = "value-display";
+  display.appendChild(valueIcon(value.icon));
+
+  if (value.badge) {
+    const badge = document.createElement("span");
+    badge.className = "value-badge";
+    badge.textContent = value.badge;
+    display.appendChild(badge);
+  }
+
+  return display;
+}
+
+function valueIcon(name) {
+  const icon = document.createElement("span");
+  icon.className = `value-icon value-icon-${name}`;
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = `<svg viewBox="0 0 24 24">${iconPaths[name] || iconPaths.circle}</svg>`;
+  return icon;
+}
+
+const iconPaths = {
+  alert:
+    '<path d="M12 3 2.7 20h18.6L12 3Z"></path><path d="M12 9v5"></path><path d="M12 17h.01"></path>',
+  circle: '<circle cx="12" cy="12" r="7"></circle>',
+  cloud:
+    '<path d="M17.5 19H8a5 5 0 1 1 1.1-9.9A7 7 0 0 1 22 12.5 4.5 4.5 0 0 1 17.5 19Z"></path>',
+  droplet:
+    '<path d="M12 2s6 6.6 6 11a6 6 0 0 1-12 0c0-4.4 6-11 6-11Z"></path>',
+  eye:
+    '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"></path><circle cx="12" cy="12" r="2.5"></circle>',
+  flame:
+    '<path d="M12 22a6 6 0 0 0 6-6c0-2.2-1.1-4.1-3.3-5.9.2 1.7-.6 2.8-1.6 3.4.2-3.4-1.3-6.4-4.1-8.5.2 2.8-1.4 4.4-2.7 6.1A7.1 7.1 0 0 0 6 16a6 6 0 0 0 6 6Z"></path><path d="M12 22a2.8 2.8 0 0 0 2.8-2.8c0-1.3-.7-2.4-2.1-3.4 0 1-.5 1.8-1.3 2.2-.1-1.4-.8-2.7-2-3.5.1 1.7-1.2 2.5-1.2 4.6A2.8 2.8 0 0 0 12 22Z"></path>',
+  haze:
+    '<path d="M4 8h16"></path><path d="M2 12h20"></path><path d="M4 16h16"></path>',
+  smoke:
+    '<path d="M5 16c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2"></path><path d="M7 11c1.4 0 1.4-1.5 2.8-1.5s1.4 1.5 2.8 1.5S15 9.5 16.4 9.5"></path><path d="M9 6c1 0 1-1.2 2-1.2s1 1.2 2 1.2"></path>',
+  sparkles:
+    '<path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7L12 3Z"></path><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z"></path>',
+  thermometer:
+    '<path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0Z"></path><path d="M12 8v8"></path>',
+  waves:
+    '<path d="M3 8c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2"></path><path d="M3 14c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2"></path><path d="M3 20c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2"></path>',
+  wind:
+    '<path d="M3 8h11a3 3 0 1 0-3-3"></path><path d="M3 13h15a3 3 0 1 1-3 3"></path><path d="M3 18h7"></path>'
+};
+
+function valuePresentation(row, entry) {
+  switch (row.id) {
+    case "cloud":
+    case "ecmwfCloud":
+      return cloudPresentation(entry);
+    case "transparency":
+      return transparencyPresentation(entry);
+    case "seeing":
+      return seeingPresentation(entry);
+    case "smoke":
+      return smokePresentation(entry);
+    case "wind":
+      return {
+        icon: "wind",
+        badge: compactRange(entry.value, ""),
+        description: windDescription(entry.value)
+      };
+    case "humidity":
+      return {
+        icon: "droplet",
+        badge: compactRange(entry.value, "%"),
+        description: humidityDescription(entry.value)
+      };
+    case "temperature":
+      return {
+        icon: "thermometer",
+        badge: compactRange(entry.value, "F"),
+        description: temperatureDescription(entry.value)
+      };
+    default:
+      return {
+        icon: "circle",
+        badge: compactValue(entry.value),
+        description: entry.value
+      };
+  }
+}
+
+function cloudPresentation(entry) {
+  const percent = percentFromText(entry.value);
+  const lower = entry.value.toLowerCase();
+  const badge = lower.includes("clear") ? "" : Number.isFinite(percent) ? `${Math.round(percent)}%` : "";
+  return {
+    icon: lower.includes("clear") ? "sparkles" : "cloud",
+    badge,
+    description: cloudDescription(percent, lower)
+  };
+}
+
+function transparencyPresentation(entry) {
+  const lower = entry.value.toLowerCase();
+  if (lower.includes("transparent")) {
+    return { icon: "sparkles", badge: "5", description: "Best transparency for faint objects." };
+  }
+  if (lower.includes("above")) {
+    return { icon: "sparkles", badge: "4", description: "Good transparency for low-contrast objects." };
+  }
+  if (lower.includes("below")) {
+    return { icon: "haze", badge: "2", description: "Haze or moisture may reduce contrast." };
+  }
+  if (lower.includes("poor")) {
+    return { icon: "haze", badge: "1", description: "Low transparency; bright targets only." };
+  }
+  if (lower.includes("cloudy")) {
+    return { icon: "cloud", badge: "", description: "Too cloudy for a reliable transparency forecast." };
+  }
+  return { icon: "eye", badge: "3", description: "Usable transparency for many targets." };
+}
+
+function seeingPresentation(entry) {
+  const lower = entry.value.toLowerCase();
+  const rating = entry.value.match(/(\d)\/5/)?.[1] || "";
+
+  if (lower.includes("excellent")) {
+    return { icon: "sparkles", badge: rating || "5/5", description: "Very steady air for high magnification." };
+  }
+  if (lower.includes("good")) {
+    return { icon: "waves", badge: rating || "4/5", description: "Steady enough for planets and fine detail." };
+  }
+  if (lower.includes("poor")) {
+    return { icon: "waves", badge: rating || "2/5", description: "Turbulence likely softens fine detail." };
+  }
+  if (lower.includes("bad")) {
+    return { icon: "alert", badge: rating || "1/5", description: "Unsteady air; high magnification suffers." };
+  }
+  if (lower.includes("cloudy")) {
+    return { icon: "cloud", badge: "", description: "Too cloudy for a seeing forecast." };
+  }
+  return { icon: "waves", badge: rating || "3/5", description: "Moderate atmospheric steadiness." };
+}
+
+function smokePresentation(entry) {
+  if (/no smoke/i.test(entry.value)) {
+    return { icon: "sparkles", badge: "", description: "No meaningful smoke forecast." };
+  }
+
+  const amount = entry.value.match(/\d+(?:\.\d+)?/)?.[0] || "";
+  const number = Number(amount);
+  let description = "Smoke may reduce transparency.";
+  if (number >= 35) {
+    description = "Smoke likely affects transparency; check air quality guidance.";
+  } else if (number > 0 && number <= 10) {
+    description = "Light smoke; transparency impact may be limited.";
+  }
+
+  return { icon: "smoke", badge: amount, description };
+}
+
+function tooltipForEntry(row, entry, value) {
+  return `${entry.value}: ${value.description} ${formatSlot(entry)}.`;
+}
+
+function percentFromText(value) {
+  if (/clear/i.test(value)) return 0;
+  if (/overcast/i.test(value)) return 100;
+  const percent = Number(String(value).match(/(\d+(?:\.\d+)?)%/)?.[1]);
+  return Number.isFinite(percent) ? percent : Number.NaN;
+}
+
+function compactRange(value, suffix) {
+  const clean = String(value).replace(/\s+/g, " ").trim();
+  const range = clean.match(/([<>]?)\s*(-?\d+(?:\.\d+)?)\s*(?:to|-)\s*(-?\d+(?:\.\d+)?)/i);
+  if (range) {
+    return `${range[1] || ""}${range[2]}-${range[3]}${suffix}`;
+  }
+
+  const single = clean.match(/^([<>]?)\s*(-?\d+(?:\.\d+)?)/);
+  if (single) {
+    return `${single[1] || ""}${single[2]}${suffix}`;
+  }
+
+  return compactValue(value);
+}
+
+function compactValue(value) {
+  return String(value)
+    .replace("covered", "")
+    .replace("Above average", "4")
+    .replace("Below Average", "2")
+    .replace("Too cloudy to forecast", "")
+    .replace("No Smoke", "")
+    .trim();
+}
+
+function cloudDescription(percent, lower) {
+  if (lower.includes("clear") || percent <= 0) return "Favorable; no cloud cover forecast.";
+  if (percent <= 20) return "Mostly clear; good observing odds.";
+  if (percent <= 50) return "Mixed sky; check source maps for cloud edges.";
+  if (percent <= 80) return "Cloudy; expect limited openings.";
+  return "Poor; sky likely blocked.";
+}
+
+function windDescription(value) {
+  const wind = averageFromText(value) ?? 0;
+  if (wind <= 5) return "Very light wind; best for telescope stability.";
+  if (wind <= 11) return "Light wind; generally workable.";
+  if (wind <= 16) return "Breezy; mount stability may matter.";
+  if (wind <= 28) return "Windy; comfort and stability are reduced.";
+  return "High wind; exposed setups may be risky.";
+}
+
+function humidityDescription(value) {
+  const humidity = averageFromText(value) ?? 0;
+  if (humidity < 70) return "Lower dew risk.";
+  if (humidity < 80) return "Moderate dew risk.";
+  if (humidity < 90) return "Elevated dew risk.";
+  return "High dew or fog risk, especially with light wind.";
+}
+
+function temperatureDescription(value) {
+  const temp = averageFromText(value) ?? 0;
+  if (temp < 32) return "Cold; plan clothing and battery capacity.";
+  if (temp <= 70) return "Comfortable observing range.";
+  if (temp <= 85) return "Warm; comfort and gear cooling may matter.";
+  return "Hot; comfort and equipment heat management matter.";
 }
 
 function emptyCell() {
@@ -286,9 +1063,19 @@ function summaryCard(card) {
   const article = document.createElement("article");
   article.className = "summary-card";
 
+  const heading = document.createElement("div");
+  heading.className = "summary-heading";
+  if (card.icon) {
+    const icon = document.createElement("span");
+    icon.className = "summary-icon";
+    icon.appendChild(valueIcon(card.icon));
+    heading.appendChild(icon);
+  }
+
   const kicker = document.createElement("p");
   kicker.className = "summary-kicker";
   kicker.textContent = card.kicker;
+  heading.appendChild(kicker);
 
   const value = document.createElement("p");
   value.className = "summary-value";
@@ -298,7 +1085,7 @@ function summaryCard(card) {
   meta.className = "summary-meta";
   meta.textContent = card.meta;
 
-  article.append(kicker, value, meta);
+  article.append(heading, value, meta);
   return article;
 }
 
@@ -320,15 +1107,37 @@ function entriesAtKey(rows, key) {
   );
 }
 
+function observingContext() {
+  const forecast = state.forecast;
+  const rows = indexRows(forecast.rows);
+  const best = findBestWindow(forecast, rows);
+  const nextDark = firstDarkSlot(forecast, rows);
+  const bestEntries = best?.best ? entriesAtKey(rows, best.best.key) : {};
+  const nextEntries = nextDark ? entriesAtKey(rows, nextDark.key) : {};
+
+  return {
+    rows,
+    best,
+    nextDark,
+    bestEntries,
+    nextEntries
+  };
+}
+
+function scoreForSlot(slot, forecast, rows) {
+  const entries = entriesAtKey(rows, slot.key);
+  return Object.entries(rowWeights).reduce((sum, [id, weight]) => {
+    const entry = id === "darkness" ? darknessForSlot(slot, forecast.rows) : entries[id];
+    return sum + (entry?.score || 0) * weight;
+  }, 0);
+}
+
 function findBestWindow(forecast, rows) {
   const candidates = forecast.timeSlots
     .filter((slot) => isNightSlot(slot, forecast.rows))
     .map((slot) => {
       const entries = entriesAtKey(rows, slot.key);
-      const score = Object.entries(rowWeights).reduce((sum, [id, weight]) => {
-        const entry = id === "darkness" ? darknessForSlot(slot, forecast.rows) : entries[id];
-        return sum + (entry?.score || 0) * weight;
-      }, 0);
+      const score = scoreForSlot(slot, forecast, rows);
       return { slot, key: slot.key, score, entries };
     })
     .filter((candidate) => candidate.entries.cloud);
@@ -402,14 +1211,12 @@ function dewRisk(humidity, wind) {
   return { label: "Lower", detail: `${humidity.value} humidity near ${formatSlot(humidity)}.` };
 }
 
-function shortValue(entry) {
-  if (entry.value.startsWith("LM ")) return entry.value;
-  return entry.value
-    .replace("covered", "")
-    .replace("Above average", "Above avg")
-    .replace("Below Average", "Below avg")
-    .replace("Too cloudy to forecast", "Cloudy")
-    .trim();
+function shortCloudValue(value) {
+  const lower = value.toLowerCase();
+  if (lower.includes("clear")) return "Clear";
+  if (lower.includes("overcast")) return "Overcast";
+  const percent = percentFromText(value);
+  return Number.isFinite(percent) ? `${Math.round(percent)}%` : value.replace("covered", "").trim();
 }
 
 function averageFromText(value) {
@@ -428,6 +1235,14 @@ function formatWindow(window) {
   return `${formatDate(window.start.date)} ${window.start.time}-${window.end.time}`;
 }
 
+function formatCompactWindow(window) {
+  if (!window) return "";
+  if (window.start.key === window.end.key) {
+    return `${formatShortDate(window.start.date)} ${window.start.time}`;
+  }
+  return `${formatShortDate(window.start.date)} ${window.start.time}\n${formatShortDate(window.end.date)} ${window.end.time}`;
+}
+
 function formatSlot(entry) {
   return `${formatDate(entry.date)} ${entry.time}`;
 }
@@ -435,6 +1250,11 @@ function formatSlot(entry) {
 function formatDate(dateString) {
   const date = new Date(`${dateString}T12:00:00`);
   return new Intl.DateTimeFormat([], { weekday: "short", month: "short", day: "numeric" }).format(date);
+}
+
+function formatShortDate(dateString) {
+  const date = new Date(`${dateString}T12:00:00`);
+  return new Intl.DateTimeFormat([], { weekday: "short" }).format(date);
 }
 
 function formatDateTime(value) {
@@ -453,6 +1273,10 @@ function pad(value) {
 function setBusy(message) {
   elements.refreshButton.disabled = true;
   elements.statusText.textContent = message;
+}
+
+function syncGraphToggle() {
+  elements.graphToggle.closest(".switch-control")?.classList.toggle("is-checked", state.graphMode);
 }
 
 function renderError(error) {
