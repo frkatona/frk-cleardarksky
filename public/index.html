@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>State College Clear Sky</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">Clear Dark Sky reader</p>
+          <h1 id="pageTitle">State College Clear Sky</h1>
+          <p class="source-line" id="sourceLine">Loading forecast...</p>
+        </div>
+        <div class="header-actions">
+          <button class="icon-button" id="refreshButton" type="button" title="Refresh forecast">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 12a9 9 0 0 1-15.3 6.4"></path>
+              <path d="M3 12A9 9 0 0 1 18.3 5.6"></path>
+              <path d="M18 2v4h-4"></path>
+              <path d="M6 22v-4h4"></path>
+            </svg>
+            <span>Refresh</span>
+          </button>
+          <a class="source-link" id="sourceLink" href="https://www.cleardarksky.com/c/StateCollegePAkey.html?1" rel="noreferrer" target="_blank">Source</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="summary-grid" id="summaryGrid" aria-live="polite">
+          <article class="summary-card loading"></article>
+          <article class="summary-card loading"></article>
+          <article class="summary-card loading"></article>
+          <article class="summary-card loading"></article>
+        </section>
+
+        <section class="toolbar" aria-label="Forecast controls">
+          <div class="segmented-control" role="group" aria-label="Visible hours">
+            <button class="segment is-active" type="button" data-mode="all">All</button>
+            <button class="segment" type="button" data-mode="night">Night</button>
+          </div>
+          <p class="status-text" id="statusText">Fetching latest chart data...</p>
+        </section>
+
+        <section class="forecast-panel" aria-label="Forecast grid">
+          <div class="forecast-scroll" id="forecastScroll">
+            <div class="forecast-grid" id="forecastGrid"></div>
+          </div>
+        </section>
+
+        <section class="darkness-panel" aria-label="Darkness timeline">
+          <div class="section-heading">
+            <h2>Darkness</h2>
+            <p id="darknessSummary"></p>
+          </div>
+          <div class="darkness-scroll">
+            <div class="darkness-track" id="darknessTrack"></div>
+            <div class="darkness-times" id="darknessTimes"></div>
+          </div>
+        </section>
+
+        <section class="legend-panel" aria-label="Forecast legend">
+          <div class="section-heading">
+            <h2>Legend</h2>
+          </div>
+          <div class="legend-grid" id="legendGrid"></div>
+        </section>
+
+        <details class="original-chart" id="originalChartWrap">
+          <summary>Original chart image</summary>
+          <a id="originalChartLink" href="#" target="_blank" rel="noreferrer">
+            <img id="originalChart" alt="">
+          </a>
+        </details>
+      </main>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
