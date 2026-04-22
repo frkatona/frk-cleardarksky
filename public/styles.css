@@ -80,7 +80,17 @@ a {
   font-size: 0.76rem;
   font-weight: 760;
   letter-spacing: 0;
-  text-transform: uppercase;
+  text-transform: none;
+}
+
+.eyebrow a {
+  color: var(--text);
+  text-decoration-color: rgba(255, 250, 242, 0.42);
+  text-underline-offset: 3px;
+}
+
+.eyebrow a:hover {
+  text-decoration-color: var(--text);
 }
 
 h1,
@@ -104,6 +114,10 @@ h2 {
   font-weight: 780;
   letter-spacing: 0;
   text-transform: uppercase;
+}
+
+.forecast-heading h2 {
+  text-transform: none;
 }
 
 main {
@@ -461,7 +475,6 @@ main > * {
 
 .hourly-panel,
 .forecast-panel,
-.darkness-panel,
 .legend-panel,
 .original-chart {
   border: 1px solid var(--line);
@@ -734,8 +747,7 @@ main > * {
   overflow: hidden;
 }
 
-.forecast-scroll,
-.darkness-scroll {
+.forecast-scroll {
   min-width: 0;
   overflow-x: auto;
   scrollbar-color: rgba(255, 255, 255, 0.4) rgba(255, 255, 255, 0.08);
@@ -781,7 +793,7 @@ main > * {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 3px;
+  gap: 4px;
   padding: 8px;
 }
 
@@ -791,13 +803,36 @@ main > * {
 }
 
 .time-date {
-  color: var(--subtle);
-  font-size: 0.68rem;
+  color: var(--accent-strong);
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 860;
+  line-height: 1.1;
   white-space: nowrap;
 }
 
+.time-date.is-day-label {
+  min-width: max-content;
+  padding: 2px 4px;
+  border-radius: 5px;
+  background: rgba(18, 27, 47, 0.72);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.42);
+}
+
 .time-cell.is-day-start {
-  box-shadow: inset 2px 0 0 var(--accent-strong);
+  position: sticky;
+  z-index: 6;
+}
+
+.time-cell.is-day-start::before,
+.forecast-cell.is-day-start::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 3;
+  width: 4px;
+  background: var(--accent-strong);
+  pointer-events: none;
 }
 
 .row-label {
@@ -832,6 +867,7 @@ main > * {
 }
 
 .forecast-cell {
+  position: relative;
   display: flex;
   min-width: 0;
   background: rgba(255, 255, 255, 0.08);
@@ -866,9 +902,27 @@ main > * {
 }
 
 .forecast-graph {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   height: 96px;
+}
+
+.graph-day-separators {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(var(--cols), var(--cell-width));
+  pointer-events: none;
+}
+
+.graph-day-separator {
+  align-self: stretch;
+  width: 4px;
+  margin-left: -2px;
+  background: var(--accent-strong);
 }
 
 .graph-baseline {
@@ -992,91 +1046,34 @@ main > * {
   position: relative;
 }
 
-.has-tooltip::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 8px);
-  z-index: 30;
-  width: max-content;
-  max-width: 230px;
+.floating-tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10000;
+  max-width: min(340px, calc(100vw - 24px));
   padding: 8px 10px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: var(--radius);
   background: rgba(12, 18, 31, 0.96);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.38);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.4);
   color: var(--text);
   font-size: 0.72rem;
   font-weight: 650;
-  line-height: 1.3;
+  line-height: 1.35;
   opacity: 0;
   pointer-events: none;
   text-align: left;
-  transform: translate(-50%, 4px);
+  transform: translateY(4px);
   transition:
     opacity 120ms ease,
     transform 120ms ease;
   white-space: normal;
 }
 
-.has-tooltip::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 3px);
-  z-index: 31;
-  width: 8px;
-  height: 8px;
-  background: rgba(12, 18, 31, 0.96);
-  border-right: 1px solid rgba(255, 255, 255, 0.18);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
-  opacity: 0;
-  pointer-events: none;
-  transform: translate(-50%, 4px) rotate(45deg);
-  transition:
-    opacity 120ms ease,
-    transform 120ms ease;
-}
-
-.has-tooltip:hover::after,
-.has-tooltip:hover::before,
-.has-tooltip:focus-visible::after,
-.has-tooltip:focus-visible::before {
+.floating-tooltip.is-visible {
   opacity: 1;
-  transform: translate(-50%, 0);
-}
-
-.has-tooltip:hover::before,
-.has-tooltip:focus-visible::before {
-  transform: translate(-50%, 0) rotate(45deg);
-}
-
-.darkness-scroll {
-  padding: 14px 16px 16px;
-}
-
-.darkness-track {
-  display: grid;
-  grid-template-columns: repeat(var(--dark-cols), minmax(5px, 1fr));
-  min-width: max(960px, 100%);
-  height: 42px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius);
-}
-
-.darkness-segment {
-  background: var(--cell-bg);
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.darkness-times {
-  display: grid;
-  grid-template-columns: repeat(var(--tick-cols), minmax(72px, 1fr));
-  min-width: max(960px, 100%);
-  color: var(--muted);
-  font-size: 0.72rem;
-  padding-top: 8px;
+  transform: translateY(0);
 }
 
 .legend-panel {

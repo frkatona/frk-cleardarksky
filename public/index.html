@@ -10,7 +10,10 @@
     <div class="app-shell">
       <header class="app-header">
         <div>
-          <p class="eyebrow">Clear Dark Sky reader</p>
+          <p class="eyebrow">
+            Astrophotography Dashboard (from
+            <a id="eyebrowSourceLink" href="https://www.cleardarksky.com/c/StateCollegePAkey.html?1" rel="noreferrer" target="_blank">cleardarksky</a>)
+          </p>
           <h1 id="pageTitle">State College Clear Sky</h1>
           <p class="source-line" id="sourceLine">Loading forecast...</p>
         </div>
@@ -45,20 +48,20 @@
           <div class="hero-night-scores" id="heroNightScores" aria-label="Night score forecast"></div>
         </section>
 
-        <section class="hourly-panel" aria-label="Hourly forecast">
+        <!-- <section class="hourly-panel" aria-label="Hourly forecast">
           <div class="section-heading">
             <h2>Hourly</h2>
             <p id="hourlySummary"></p>
           </div>
           <div class="hourly-strip" id="hourlyStrip"></div>
-        </section>
+        </section> -->
 
-        <section class="summary-grid" id="summaryGrid" aria-label="Observing details">
+        <!-- <section class="summary-grid" id="summaryGrid" aria-label="Observing details">
           <article class="summary-card loading"></article>
           <article class="summary-card loading"></article>
           <article class="summary-card loading"></article>
           <article class="summary-card loading"></article>
-        </section>
+        </section> -->
 
         <section class="toolbar" aria-label="Forecast controls">
           <div class="control-cluster">
@@ -77,33 +80,21 @@
           <p class="status-text" id="statusText">Fetching latest chart data...</p>
         </section>
 
-        <section class="forecast-panel" aria-label="Forecast grid">
+        <section class="forecast-panel" aria-label="Hourly conditions grid">
           <div class="section-heading forecast-heading">
-            <h2>Astronomy Chart</h2>
-            <p>Color shows observing quality; hover or focus cells for source values.</p>
+            <h2>Hourly Conditions</h2>
           </div>
           <div class="forecast-scroll" id="forecastScroll">
             <div class="forecast-grid" id="forecastGrid"></div>
           </div>
         </section>
 
-        <section class="darkness-panel" aria-label="Darkness timeline">
-          <div class="section-heading">
-            <h2>Darkness</h2>
-            <p id="darknessSummary"></p>
-          </div>
-          <div class="darkness-scroll">
-            <div class="darkness-track" id="darknessTrack"></div>
-            <div class="darkness-times" id="darknessTimes"></div>
-          </div>
-        </section>
-
-        <section class="legend-panel" aria-label="Forecast legend">
+        <!-- <section class="legend-panel" aria-label="Forecast legend">
           <div class="section-heading">
             <h2>Legend</h2>
           </div>
           <div class="legend-grid" id="legendGrid"></div>
-        </section>
+        </section> -->
 
         <details class="original-chart" id="originalChartWrap">
           <summary>Original chart image</summary>

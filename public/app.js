@@ -6,6 +6,7 @@ const state = {
 
 const elements = {
   pageTitle: document.querySelector("#pageTitle"),
+  eyebrowSourceLink: document.querySelector("#eyebrowSourceLink"),
   sourceLine: document.querySelector("#sourceLine"),
   sourceLink: document.querySelector("#sourceLink"),
   refreshButton: document.querySelector("#refreshButton"),
@@ -21,9 +22,6 @@ const elements = {
   hourlySummary: document.querySelector("#hourlySummary"),
   summaryGrid: document.querySelector("#summaryGrid"),
   forecastGrid: document.querySelector("#forecastGrid"),
-  darknessTrack: document.querySelector("#darknessTrack"),
-  darknessTimes: document.querySelector("#darknessTimes"),
-  darknessSummary: document.querySelector("#darknessSummary"),
   legendGrid: document.querySelector("#legendGrid"),
   originalChart: document.querySelector("#originalChart"),
   originalChartLink: document.querySelector("#originalChartLink")
@@ -63,6 +61,7 @@ elements.graphToggle.addEventListener("change", () => {
   renderForecast();
 });
 
+installFloatingTooltips();
 loadForecast(false);
 
 async function loadForecast(refresh) {
@@ -85,6 +84,7 @@ async function loadForecast(refresh) {
 function render() {
   const forecast = state.forecast;
   elements.pageTitle.textContent = forecast.title.replace("Clear Sky Chart", "Clear Sky");
+  elements.eyebrowSourceLink.href = forecast.sourceUrl;
   elements.sourceLink.href = forecast.sourceUrl;
   elements.sourceLine.textContent = [
     forecast.lastUpdated ? `Updated ${forecast.lastUpdated}` : null,
@@ -103,12 +103,13 @@ function render() {
   renderHourly();
   renderSummary();
   renderForecast();
-  renderDarkness();
   renderLegend();
   elements.statusText.textContent = `Fetched ${formatDateTime(forecast.fetchedAt)} from Clear Dark Sky.`;
 }
 
 function renderSummary() {
+  if (!elements.summaryGrid) return;
+
   const { best, bestEntries, nextEntries } = observingContext();
   const cloud = bestEntries.cloud || nextEntries.cloud;
   const trans = bestEntries.transparency || nextEntries.transparency;
@@ -185,8 +186,7 @@ function renderHeroNightScores() {
 
   const heading = document.createElement("div");
   heading.className = "hero-night-heading has-tooltip";
-  heading.dataset.tooltip = compositeScoreTooltip();
-  heading.title = heading.dataset.tooltip;
+  setTooltip(heading, compositeScoreTooltip());
   const title = document.createElement("p");
   title.textContent = "Night scores";
   const range = document.createElement("p");
@@ -229,8 +229,7 @@ function nightScoreCard(slots, highestPeak) {
   const card = document.createElement("article");
   card.className = "night-score-card has-tooltip";
   card.tabIndex = 0;
-  card.dataset.tooltip = compositeScoreTooltip();
-  card.title = card.dataset.tooltip;
+  setTooltip(card, compositeScoreTooltip());
   const peak = slots.slice().sort((left, right) => right.score - left.score)[0];
   card.classList.toggle("is-best", peak.score === highestPeak);
 
@@ -332,11 +331,11 @@ function nightScoreSvg(slots) {
 
   slots.forEach((slot, index) => {
     const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    dot.setAttribute("class", slot.score === peakScore ? "night-score-dot is-peak" : "night-score-dot");
+    dot.setAttribute("class", slot.score === peakScore ? "night-score-dot is-peak has-tooltip" : "night-score-dot has-tooltip");
     dot.setAttribute("cx", String(xFor(index)));
     dot.setAttribute("cy", String(yFor(slot.score)));
     dot.setAttribute("r", slot.score === peakScore ? "4.5" : "3.6");
-    appendSvgTitle(dot, `${formatSlot(slot)}: ${slot.score}`);
+    setTooltip(dot, `${formatSlot(slot)}: ${slot.score}. ${compositeScoreTooltip()}`);
     svg.appendChild(dot);
   });
 
@@ -359,6 +358,8 @@ function nightLabel(slots) {
 }
 
 function renderHourly() {
+  if (!elements.hourlyStrip || !elements.hourlySummary) return;
+
   const forecast = state.forecast;
   const rows = indexRows(forecast.rows);
   const cloudRow = forecast.rows.find((row) => row.id === "cloud");
@@ -372,15 +373,14 @@ function renderHourly() {
     const card = document.createElement("article");
     card.className = "hour-card has-tooltip";
     card.tabIndex = 0;
-    card.dataset.tooltip = [
+    setTooltip(card, [
       formatSlot(slot),
       cloud ? `Cloud ${cloud.value}` : null,
       entries.transparency ? `Transparency ${entries.transparency.value}` : null,
       entries.seeing ? `Seeing ${entries.seeing.value}` : null
     ]
       .filter(Boolean)
-      .join(". ");
-    card.title = card.dataset.tooltip;
+      .join(". "));
 
     const time = document.createElement("p");
     time.className = "hour-time";
@@ -417,7 +417,7 @@ function renderForecast() {
   const forecast = state.forecast;
   if (!forecast) return;
 
-  const rows = forecast.rows.filter((row) => row.id !== "darkness");
+  const rows = rowsWithDarknessFirst(forecast.rows);
   const visibleSlots = forecast.timeSlots.filter((slot) => state.mode === "all" || isNightSlot(slot, forecast.rows));
   const fragment = document.createDocumentFragment();
 
@@ -426,19 +426,20 @@ function renderForecast() {
 
   visibleSlots.forEach((slot, index) => {
     const cell = gridCell("time-cell", "");
-    if (index === 0 || slot.time === "0:00") {
+    const isDayStart = isDayStartSlot(slot, index);
+    if (isDayStart) {
       cell.classList.add("is-day-start");
     }
+
+    const date = document.createElement("span");
+    date.className = isDayStart ? "time-date is-day-label" : "time-date";
+    date.textContent = isDayStart ? formatChartDate(slot.date) : "\u00a0";
 
     const time = document.createElement("span");
     time.className = "time-main";
     time.textContent = slot.time;
 
-    const date = document.createElement("span");
-    date.className = "time-date";
-    date.textContent = index === 0 || slot.time === "0:00" ? formatDate(slot.date) : "\u00a0";
-
-    cell.append(time, date);
+    cell.append(date, time);
     fragment.appendChild(cell);
   });
 
@@ -454,9 +455,11 @@ function renderForecast() {
     if (state.graphMode && isGraphableRow(row)) {
       fragment.appendChild(graphCell(row, visibleSlots, byKey));
     } else {
-      visibleSlots.forEach((slot) => {
+      visibleSlots.forEach((slot, index) => {
         const entry = byKey.get(slot.key);
-        fragment.appendChild(entry ? forecastCell(entry, row) : emptyCell());
+        const cell = entry ? forecastCell(entry, row) : emptyCell();
+        cell.classList.toggle("is-day-start", isDayStartSlot(slot, index));
+        fragment.appendChild(cell);
       });
     }
   });
@@ -464,8 +467,19 @@ function renderForecast() {
   elements.forecastGrid.replaceChildren(fragment);
 }
 
+function rowsWithDarknessFirst(rows) {
+  const darkness = rows.find((row) => row.id === "darkness");
+  const rest = rows.filter((row) => row.id !== "darkness");
+  return darkness ? [darkness, ...rest] : rest;
+}
+
+function isDayStartSlot(slot, index) {
+  return index === 0 || slot.time === "0:00";
+}
+
 function rowLabelIcon(row) {
   const iconMap = {
+    darkness: "moon",
     cloud: "cloud",
     ecmwfCloud: "cloud",
     transparency: "eye",
@@ -481,43 +495,10 @@ function rowLabelIcon(row) {
   return wrapper;
 }
 
-function renderDarkness() {
-  const forecast = state.forecast;
-  const darkness = forecast.rows.find((row) => row.id === "darkness");
-  if (!darkness) return;
-
-  elements.darknessTrack.style.setProperty("--dark-cols", darkness.entries.length);
-  elements.darknessTrack.replaceChildren(
-    ...darkness.entries.map((entry) => {
-      const segment = document.createElement("span");
-      segment.className = "darkness-segment";
-      segment.style.setProperty("--cell-bg", entry.color);
-      segment.title = `${formatSlot(entry)} | ${entry.details}`;
-      return segment;
-    })
-  );
-
-  const ticks = darkness.entries.filter((entry) => entry.minute === 0 && entry.hour % 4 === 0);
-  elements.darknessTimes.style.setProperty("--tick-cols", Math.max(ticks.length, 1));
-  elements.darknessTimes.replaceChildren(
-    ...ticks.map((entry) => {
-      const tick = document.createElement("span");
-      tick.textContent = `${formatDate(entry.date)} ${entry.time}`;
-      return tick;
-    })
-  );
-
-  const darkest = darkness.entries
-    .filter((entry) => Number.isFinite(entry.metrics?.limitingMag))
-    .sort((left, right) => right.metrics.limitingMag - left.metrics.limitingMag)[0];
-
-  elements.darknessSummary.textContent = darkest
-    ? `Darkest block: ${formatSlot(darkest)}, limiting mag ${darkest.metrics.limitingMag.toFixed(1)}.`
-    : "";
-}
-
 function renderLegend() {
-  const rows = state.forecast.rows.filter((row) => row.id !== "darkness");
+  if (!elements.legendGrid) return;
+
+  const rows = rowsWithDarknessFirst(state.forecast.rows);
   const groups = rows.map((row) => {
     const group = document.createElement("article");
     group.className = "legend-group";
@@ -538,24 +519,35 @@ function renderLegend() {
       }
     });
 
-    unique.slice(0, 18).forEach((entry) => {
-      const value = valuePresentation(row, entry);
-      const chip = document.createElement("span");
-      chip.className = "legend-chip has-tooltip";
-      chip.style.setProperty("--cell-bg", entry.color);
-      chip.style.setProperty("--cell-color", entry.textColor);
-      chip.dataset.tooltip = tooltipForEntry(row, entry, value);
-      chip.title = chip.dataset.tooltip;
-      chip.setAttribute("aria-label", `${row.label}: ${entry.value}`);
-      chip.appendChild(valueDisplay(value));
-      chips.appendChild(chip);
-    });
+    unique
+      .sort((left, right) => right.score - left.score || legendSortTieBreaker(row, left, right))
+      .slice(0, 18)
+      .forEach((entry) => {
+        const value = valuePresentation(row, entry);
+        const chip = document.createElement("span");
+        chip.className = "legend-chip has-tooltip";
+        chip.style.setProperty("--cell-bg", entry.color);
+        chip.style.setProperty("--cell-color", entry.textColor);
+        setTooltip(chip, tooltipForEntry(row, entry, value));
+        chip.setAttribute("aria-label", `${row.label}: ${entry.value}`);
+        chip.appendChild(valueDisplay(value));
+        chips.appendChild(chip);
+      });
 
     group.append(title, chips);
     return group;
   });
 
   elements.legendGrid.replaceChildren(...groups);
+}
+
+function legendSortTieBreaker(row, left, right) {
+  const leftValue = graphValueFor(row.id, left)?.value;
+  const rightValue = graphValueFor(row.id, right)?.value;
+  if (Number.isFinite(leftValue) && Number.isFinite(rightValue)) {
+    return leftValue - rightValue;
+  }
+  return left.value.localeCompare(right.value, undefined, { numeric: true, sensitivity: "base" });
 }
 
 function forecastCell(entry, row) {
@@ -567,8 +559,7 @@ function forecastCell(entry, row) {
   content.className = "cell-link has-tooltip";
   content.style.setProperty("--cell-bg", entry.color);
   content.style.setProperty("--cell-color", entry.textColor);
-  content.dataset.tooltip = tooltipForEntry(row, entry, value);
-  content.title = content.dataset.tooltip;
+  setTooltip(content, tooltipForEntry(row, entry, value));
   content.setAttribute("aria-label", `${row.label}: ${entry.title}`);
   content.appendChild(valueDisplay(value));
 
@@ -582,7 +573,7 @@ function forecastCell(entry, row) {
   return wrapper;
 }
 
-const graphableRows = new Set(["cloud", "ecmwfCloud", "seeing", "smoke", "wind", "humidity", "temperature"]);
+const graphableRows = new Set(["darkness", "cloud", "ecmwfCloud", "seeing", "smoke", "wind", "humidity", "temperature"]);
 
 function isGraphableRow(row) {
   return graphableRows.has(row.id);
@@ -640,12 +631,12 @@ function graphCell(row, visibleSlots, byKey) {
     const x = xFor(point.index);
     if (point.isRange) {
       const bar = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      bar.setAttribute("class", "graph-range");
+      bar.setAttribute("class", "graph-range has-tooltip");
       bar.setAttribute("x1", String(x));
       bar.setAttribute("x2", String(x));
       bar.setAttribute("y1", String(yFor(point.max)));
       bar.setAttribute("y2", String(yFor(point.min)));
-      appendSvgTitle(bar, graphTooltip(row, point));
+      setTooltip(bar, graphTooltip(row, point));
       svg.appendChild(bar);
     }
   });
@@ -660,11 +651,11 @@ function graphCell(row, visibleSlots, byKey) {
 
   usablePoints.forEach((point) => {
     const marker = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    marker.setAttribute("class", point.isRange ? "graph-marker is-range" : "graph-marker");
+    marker.setAttribute("class", point.isRange ? "graph-marker is-range has-tooltip" : "graph-marker has-tooltip");
     marker.setAttribute("cx", String(xFor(point.index)));
     marker.setAttribute("cy", String(yFor(point.value)));
     marker.setAttribute("r", point.isRange ? "3.1" : "3.8");
-    appendSvgTitle(marker, graphTooltip(row, point));
+    setTooltip(marker, graphTooltip(row, point));
     svg.appendChild(marker);
   });
 
@@ -676,12 +667,32 @@ function graphCell(row, visibleSlots, byKey) {
   low.textContent = formatGraphValue(row.id, domain.min);
   scale.append(high, low);
 
-  cell.append(svg, scale);
+  const separators = daySeparatorLayer(visibleSlots);
+  cell.append(separators, svg, scale);
   return cell;
+}
+
+function daySeparatorLayer(visibleSlots) {
+  const layer = document.createElement("div");
+  layer.className = "graph-day-separators";
+
+  visibleSlots.forEach((slot, index) => {
+    if (!isDayStartSlot(slot, index)) return;
+    const separator = document.createElement("span");
+    separator.className = "graph-day-separator";
+    separator.style.gridColumn = String(index + 1);
+    layer.appendChild(separator);
+  });
+
+  return layer;
 }
 
 function graphValueFor(rowId, entry) {
   switch (rowId) {
+    case "darkness": {
+      const limitingMag = Number(entry.metrics?.limitingMag);
+      return Number.isFinite(limitingMag) ? exactGraphValue(limitingMag) : null;
+    }
     case "cloud":
     case "ecmwfCloud": {
       const value = percentFromText(entry.value);
@@ -770,6 +781,11 @@ function graphDomain(rowId, points) {
     max = Math.ceil(max / 10) * 10;
   }
 
+  if (rowId === "darkness") {
+    min = Math.floor(min);
+    max = Math.ceil(max);
+  }
+
   if (min === max) {
     min -= 1;
     max += 1;
@@ -798,12 +814,6 @@ function pathFromPoints(points) {
   return points.map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`).join(" ");
 }
 
-function appendSvgTitle(node, text) {
-  const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-  title.textContent = text;
-  node.appendChild(title);
-}
-
 function graphTooltip(row, point) {
   const range = point.isRange ? `${formatGraphValue(row.id, point.min)} to ${formatGraphValue(row.id, point.max)}` : formatGraphValue(row.id, point.value);
   return `${row.label}: ${range}. ${point.entry.value}. ${formatSlot(point.slot)}.`;
@@ -814,6 +824,7 @@ function formatGraphValue(rowId, value) {
     return `${Math.round(value)}%`;
   }
   if (rowId === "seeing") return `${Math.round(value)}/5`;
+  if (rowId === "darkness") return `LM ${value.toFixed(1)}`;
   if (rowId === "wind") return `${Math.round(value)} mph`;
   if (rowId === "temperature") return `${Math.round(value)}F`;
   if (rowId === "smoke") return `${Math.round(value)} ug`;
@@ -857,10 +868,14 @@ const iconPaths = {
     '<path d="M12 22a6 6 0 0 0 6-6c0-2.2-1.1-4.1-3.3-5.9.2 1.7-.6 2.8-1.6 3.4.2-3.4-1.3-6.4-4.1-8.5.2 2.8-1.4 4.4-2.7 6.1A7.1 7.1 0 0 0 6 16a6 6 0 0 0 6 6Z"></path><path d="M12 22a2.8 2.8 0 0 0 2.8-2.8c0-1.3-.7-2.4-2.1-3.4 0 1-.5 1.8-1.3 2.2-.1-1.4-.8-2.7-2-3.5.1 1.7-1.2 2.5-1.2 4.6A2.8 2.8 0 0 0 12 22Z"></path>',
   haze:
     '<path d="M4 8h16"></path><path d="M2 12h20"></path><path d="M4 16h16"></path>',
+  moon:
+    '<path d="M21 14.8A8.5 8.5 0 0 1 9.2 3 7 7 0 1 0 21 14.8Z"></path>',
   smoke:
     '<path d="M5 16c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2"></path><path d="M7 11c1.4 0 1.4-1.5 2.8-1.5s1.4 1.5 2.8 1.5S15 9.5 16.4 9.5"></path><path d="M9 6c1 0 1-1.2 2-1.2s1 1.2 2 1.2"></path>',
   sparkles:
     '<path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7L12 3Z"></path><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z"></path>',
+  sun:
+    '<circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.9 4.9 1.4 1.4"></path><path d="m17.7 17.7 1.4 1.4"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m4.9 19.1 1.4-1.4"></path><path d="m17.7 6.3 1.4-1.4"></path>',
   thermometer:
     '<path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0Z"></path><path d="M12 8v8"></path>',
   waves:
@@ -871,6 +886,8 @@ const iconPaths = {
 
 function valuePresentation(row, entry) {
   switch (row.id) {
+    case "darkness":
+      return darknessPresentation(entry);
     case "cloud":
     case "ecmwfCloud":
       return cloudPresentation(entry);
@@ -905,6 +922,44 @@ function valuePresentation(row, entry) {
         description: entry.value
       };
   }
+}
+
+function darknessPresentation(entry) {
+  const limitingMag = entry.metrics?.limitingMag;
+  const sunAlt = entry.metrics?.sunAlt;
+  return {
+    icon: Number.isFinite(sunAlt) && sunAlt > -6 ? "sun" : "moon",
+    badge: Number.isFinite(limitingMag) ? limitingMag.toFixed(1) : compactValue(entry.value),
+    description: darknessDescription(entry)
+  };
+}
+
+function darknessDescription(entry) {
+  const limitingMag = entry.metrics?.limitingMag;
+  const sunAlt = entry.metrics?.sunAlt;
+  const moonIllum = entry.metrics?.moonIllum;
+  const details = [];
+
+  if (Number.isFinite(limitingMag)) details.push(`limiting magnitude ${limitingMag.toFixed(1)}`);
+  if (Number.isFinite(sunAlt)) details.push(`sun altitude ${sunAlt.toFixed(1)} deg`);
+  if (Number.isFinite(moonIllum)) details.push(`moon ${Math.round(moonIllum)}% illuminated`);
+
+  let quality = "Darkness data from the Clear Dark Sky chart";
+  if (Number.isFinite(sunAlt) && sunAlt > 0) {
+    quality = "Daylight; stars are washed out";
+  } else if (Number.isFinite(sunAlt) && sunAlt > -6) {
+    quality = "Civil twilight; only bright targets are practical";
+  } else if (Number.isFinite(limitingMag) && limitingMag >= 5.5) {
+    quality = "Astronomically dark; faint targets are favored";
+  } else if (Number.isFinite(limitingMag) && limitingMag >= 4) {
+    quality = "Dark enough for many deep-sky targets";
+  } else if (Number.isFinite(limitingMag) && limitingMag >= 2.5) {
+    quality = "Twilight or moonlight limits faint detail";
+  } else if (Number.isFinite(limitingMag)) {
+    quality = "Bright sky; faint objects will be difficult";
+  }
+
+  return details.length ? `${quality}; ${details.join(", ")}` : quality;
 }
 
 function cloudPresentation(entry) {
@@ -1252,6 +1307,11 @@ function formatDate(dateString) {
   return new Intl.DateTimeFormat([], { weekday: "short", month: "short", day: "numeric" }).format(date);
 }
 
+function formatChartDate(dateString) {
+  const date = new Date(`${dateString}T12:00:00`);
+  return new Intl.DateTimeFormat([], { weekday: "short", month: "long", day: "numeric" }).format(date);
+}
+
 function formatShortDate(dateString) {
   const date = new Date(`${dateString}T12:00:00`);
   return new Intl.DateTimeFormat([], { weekday: "short" }).format(date);
@@ -1279,8 +1339,97 @@ function syncGraphToggle() {
   elements.graphToggle.closest(".switch-control")?.classList.toggle("is-checked", state.graphMode);
 }
 
+function setTooltip(element, text) {
+  element.dataset.tooltip = text;
+  element.removeAttribute("title");
+}
+
+function installFloatingTooltips() {
+  const tooltip = document.createElement("div");
+  tooltip.className = "floating-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  document.body.appendChild(tooltip);
+
+  let activeTarget = null;
+
+  function tooltipTarget(event) {
+    if (!(event.target instanceof Element)) return null;
+    return event.target.closest(".has-tooltip[data-tooltip]");
+  }
+
+  function show(target, x, y) {
+    const text = target.dataset.tooltip;
+    if (!text) return;
+
+    activeTarget = target;
+    target.removeAttribute("title");
+    tooltip.textContent = text;
+    tooltip.classList.add("is-visible");
+    tooltip.style.left = "0px";
+    tooltip.style.top = "0px";
+    position(x, y);
+  }
+
+  function position(x, y) {
+    if (!activeTarget) return;
+
+    const margin = 12;
+    const offset = 16;
+    const rect = tooltip.getBoundingClientRect();
+    let left = x + offset;
+    let top = y + offset;
+
+    if (left + rect.width + margin > window.innerWidth) {
+      left = x - rect.width - offset;
+    }
+    if (top + rect.height + margin > window.innerHeight) {
+      top = y - rect.height - offset;
+    }
+
+    tooltip.style.left = `${Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin))}px`;
+    tooltip.style.top = `${Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin))}px`;
+  }
+
+  function hide() {
+    activeTarget = null;
+    tooltip.classList.remove("is-visible");
+  }
+
+  document.addEventListener("pointerover", (event) => {
+    const target = tooltipTarget(event);
+    if (!target || target === activeTarget) return;
+    show(target, event.clientX, event.clientY);
+  });
+
+  document.addEventListener("pointermove", (event) => {
+    if (activeTarget) position(event.clientX, event.clientY);
+  });
+
+  document.addEventListener("pointerout", (event) => {
+    if (!activeTarget) return;
+    if (event.relatedTarget instanceof Node && activeTarget.contains(event.relatedTarget)) return;
+    hide();
+  });
+
+  document.addEventListener("focusin", (event) => {
+    const target = tooltipTarget(event);
+    if (!target) return;
+
+    const rect = target.getBoundingClientRect();
+    show(target, rect.left + rect.width / 2, rect.top + rect.height);
+  });
+
+  document.addEventListener("focusout", hide);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hide();
+  });
+  window.addEventListener("scroll", hide, true);
+  window.addEventListener("resize", hide);
+}
+
 function renderError(error) {
   elements.statusText.textContent = "Forecast fetch failed.";
+  if (!elements.summaryGrid) return;
   elements.summaryGrid.replaceChildren();
 
   const card = document.createElement("article");
