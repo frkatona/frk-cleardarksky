@@ -11,13 +11,8 @@ const elements = {
   sourceLink: document.querySelector("#sourceLink"),
   refreshButton: document.querySelector("#refreshButton"),
   graphToggle: document.querySelector("#graphToggle"),
-  statusText: document.querySelector("#statusText"),
   weatherHero: document.querySelector("#weatherHero"),
-  heroIcon: document.querySelector("#heroIcon"),
-  heroCondition: document.querySelector("#heroCondition"),
   heroScorePanel: document.querySelector(".hero-score"),
-  heroScore: document.querySelector("#heroScore"),
-  heroMeta: document.querySelector("#heroMeta"),
   heroNightScores: document.querySelector("#heroNightScores"),
   hourlyStrip: document.querySelector("#hourlyStrip"),
   hourlySummary: document.querySelector("#hourlySummary"),
@@ -121,12 +116,7 @@ function render() {
   elements.pageTitle.textContent = forecast.title.replace("Clear Sky Chart", "Clear Sky");
   elements.eyebrowSourceLink.href = forecast.sourceUrl;
   elements.sourceLink.href = forecast.sourceUrl;
-  elements.sourceLine.textContent = [
-    forecast.lastUpdated ? `Updated ${forecast.lastUpdated}` : null,
-    forecast.coordinates ? `Coordinates ${forecast.coordinates}` : null
-  ]
-    .filter(Boolean)
-    .join(" | ");
+  updateSourceLine(forecast);
 
   if (forecast.image?.src) {
     elements.originalChart.src = forecast.image.src;
@@ -139,7 +129,6 @@ function render() {
   renderSummary();
   renderForecast();
   renderLegend();
-  elements.statusText.textContent = `Fetched ${formatDateTime(forecast.fetchedAt)} from Clear Dark Sky.`;
 }
 
 function renderSummary() {
@@ -183,29 +172,12 @@ function renderSummary() {
 }
 
 function renderHero() {
-  const { rows, best, bestEntries, nextEntries } = observingContext();
-  const cloud = bestEntries.cloud || nextEntries.cloud;
-  const trans = bestEntries.transparency || nextEntries.transparency;
-  const seeing = bestEntries.seeing || nextEntries.seeing;
+  const { rows, best } = observingContext();
   const score = best ? Math.round(best.best.score) : null;
   const quality = score === null ? "unknown" : score >= 75 ? "good" : score >= 50 ? "mixed" : "poor";
 
   elements.weatherHero.dataset.quality = quality;
-  elements.heroIcon.replaceChildren();
-  if (cloud) {
-    elements.heroIcon.appendChild(valueIcon(valuePresentation({ id: "cloud" }, cloud).icon));
-  }
-
-  elements.heroCondition.textContent = cloud
-    ? `${cloud.value}${trans ? `, ${trans.value.toLowerCase()} transparency` : ""}`
-    : "Forecast unavailable";
   renderHeroScoreRadar(best, rows);
-  elements.heroMeta.textContent = [
-    best ? `Best observing: ${formatWindow(best)}` : null,
-    seeing ? `Seeing ${seeing.value}` : null
-  ]
-    .filter(Boolean)
-    .join(" | ");
   renderHeroNightScores();
 }
 
@@ -240,7 +212,11 @@ function renderHeroScoreRadar(best, rows) {
 
   const caption = document.createElement("p");
   caption.className = "hero-radar-caption";
-  caption.textContent = `Best conditions: ${formatSlot(slot)}`;
+  const captionLabel = document.createElement("span");
+  captionLabel.textContent = "Best viewing:";
+  const captionTime = document.createElement("span");
+  captionTime.textContent = formatHeroViewingSlot(slot);
+  caption.append(captionLabel, captionTime);
 
   elements.heroScorePanel.replaceChildren(chart, caption);
 }
@@ -1390,6 +1366,19 @@ function formatSlot(entry) {
   return `${formatDate(entry.date)} ${entry.time}`;
 }
 
+function formatHeroViewingSlot(slot) {
+  const viewingPeriod = slot.hour < 12 ? "morning" : "night";
+  return `${formatShortDate(slot.date)} ${viewingPeriod}, ${formatStandardTime(slot)}`;
+}
+
+function formatStandardTime(slot) {
+  const hour = Number(slot.hour);
+  const minute = Number(slot.minute || 0);
+  const suffix = hour < 12 ? "am" : "pm";
+  const standardHour = hour % 12 || 12;
+  return `${standardHour}:${pad(minute)} ${suffix}`;
+}
+
 function formatDate(dateString) {
   const date = new Date(`${dateString}T12:00:00`);
   return new Intl.DateTimeFormat([], { weekday: "short", month: "short", day: "numeric" }).format(date);
@@ -1418,9 +1407,19 @@ function pad(value) {
   return String(value).padStart(2, "0");
 }
 
+function updateSourceLine(forecast) {
+  elements.sourceLine.textContent = [
+    forecast.lastUpdated ? `Chart updated ${forecast.lastUpdated}` : null,
+    forecast.fetchedAt ? `Fetched ${formatDateTime(forecast.fetchedAt)}` : null,
+    forecast.coordinates ? `Coordinates ${forecast.coordinates}` : null
+  ]
+    .filter(Boolean)
+    .join(" | ");
+}
+
 function setBusy(message) {
   elements.refreshButton.disabled = true;
-  elements.statusText.textContent = message;
+  elements.sourceLine.textContent = message;
 }
 
 function syncGraphToggle() {
@@ -1803,7 +1802,7 @@ function installFloatingTooltips() {
 }
 
 function renderError(error) {
-  elements.statusText.textContent = "Forecast fetch failed.";
+  elements.sourceLine.textContent = "Forecast fetch failed.";
   if (!elements.summaryGrid) return;
   elements.summaryGrid.replaceChildren();
 
