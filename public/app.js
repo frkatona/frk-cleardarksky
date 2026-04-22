@@ -68,17 +68,37 @@ async function loadForecast(refresh) {
   setBusy(refresh ? "Refreshing chart data..." : "Fetching latest chart data...");
 
   try {
-    const response = await fetch(`/api/forecast${refresh ? "?refresh=1" : ""}`);
-    if (!response.ok) {
-      throw new Error(`Local server responded with ${response.status}`);
-    }
-    state.forecast = await response.json();
+    state.forecast = await fetchForecast(refresh);
     render();
   } catch (error) {
     renderError(error);
   } finally {
     elements.refreshButton.disabled = false;
   }
+}
+
+async function fetchForecast(refresh) {
+  const isLocalServer = ["localhost", "127.0.0.1", ""].includes(window.location.hostname);
+  const cacheBust = refresh ? `?t=${Date.now()}` : "";
+  const dynamicQuery = refresh ? "?refresh=1" : "";
+  const dynamicApi = `api/forecast${dynamicQuery}`;
+  const staticSnapshot = `api/forecast.json${cacheBust}`;
+  const urls = isLocalServer ? [dynamicApi, staticSnapshot] : [staticSnapshot, dynamicApi];
+  let lastError = null;
+
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, { cache: refresh ? "reload" : "default" });
+      if (!response.ok) {
+        throw new Error(`${url} responded with ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error("No forecast endpoint responded.");
 }
 
 function render() {

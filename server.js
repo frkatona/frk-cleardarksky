@@ -1,10 +1,10 @@
 import http from "node:http";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const PORT = Number(process.env.PORT || 4173);
-const SOURCE_URL = "https://www.cleardarksky.com/c/StateCollegePAkey.html?1";
+export const SOURCE_URL = "https://www.cleardarksky.com/c/StateCollegePAkey.html?1";
 const CACHE_MS = 5 * 60 * 1000;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -56,9 +56,11 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`AK Clear Sky is running at http://localhost:${PORT}`);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  server.listen(PORT, () => {
+    console.log(`AK Clear Sky is running at http://localhost:${PORT}`);
+  });
+}
 
 async function serveStatic(urlPath, response) {
   const cleanPath = urlPath === "/" ? "/index.html" : decodeURIComponent(urlPath);
@@ -86,7 +88,7 @@ async function serveStatic(urlPath, response) {
   }
 }
 
-async function getForecast(forceRefresh = false) {
+export async function getForecast(forceRefresh = false) {
   const now = Date.now();
   if (!forceRefresh && forecastCache && now - forecastCache.cachedAt < CACHE_MS) {
     return forecastCache.payload;
@@ -116,7 +118,7 @@ async function getForecast(forceRefresh = false) {
   return payload;
 }
 
-function parseForecast(html) {
+export function parseForecast(html) {
   const title =
     getMetaContent(html, "DC.title") ||
     textBetween(html, /<title[^>]*>([\s\S]*?)<\/title>/i) ||
