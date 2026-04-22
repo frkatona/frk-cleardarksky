@@ -15,6 +15,7 @@ const elements = {
   weatherHero: document.querySelector("#weatherHero"),
   heroIcon: document.querySelector("#heroIcon"),
   heroCondition: document.querySelector("#heroCondition"),
+  heroScorePanel: document.querySelector(".hero-score"),
   heroScore: document.querySelector("#heroScore"),
   heroMeta: document.querySelector("#heroMeta"),
   heroNightScores: document.querySelector("#heroNightScores"),
@@ -37,6 +38,19 @@ const rowWeights = {
   wind: 0.04,
   humidity: 0.02
 };
+
+const scoreComponentMeta = [
+  { id: "cloud", label: "Cloud cover", color: "#4e79a7" },
+  { id: "ecmwfCloud", label: "ECMWF cloud", color: "#76b7b2" },
+  { id: "transparency", label: "Transparency", color: "#59a14f" },
+  { id: "seeing", label: "Seeing", color: "#b07aa1" },
+  { id: "darkness", label: "Darkness", color: "#edc948" },
+  { id: "smoke", label: "Smoke", color: "#bab0ab" },
+  { id: "wind", label: "Wind", color: "#f28e2b" },
+  { id: "humidity", label: "Humidity", color: "#e15759" }
+];
+
+const nightScoreRadarData = new WeakMap();
 
 document.querySelectorAll(".segment").forEach((button) => {
   button.addEventListener("click", () => {
@@ -62,6 +76,7 @@ elements.graphToggle.addEventListener("change", () => {
 });
 
 installFloatingTooltips();
+installNightScoreRadarPopover();
 loadForecast(false);
 
 async function loadForecast(refresh) {
@@ -168,7 +183,7 @@ function renderSummary() {
 }
 
 function renderHero() {
-  const { best, bestEntries, nextEntries } = observingContext();
+  const { rows, best, bestEntries, nextEntries } = observingContext();
   const cloud = bestEntries.cloud || nextEntries.cloud;
   const trans = bestEntries.transparency || nextEntries.transparency;
   const seeing = bestEntries.seeing || nextEntries.seeing;
@@ -184,7 +199,7 @@ function renderHero() {
   elements.heroCondition.textContent = cloud
     ? `${cloud.value}${trans ? `, ${trans.value.toLowerCase()} transparency` : ""}`
     : "Forecast unavailable";
-  elements.heroScore.textContent = score === null ? "--" : String(score);
+  renderHeroScoreRadar(best, rows);
   elements.heroMeta.textContent = [
     best ? `Best observing: ${formatWindow(best)}` : null,
     seeing ? `Seeing ${seeing.value}` : null
@@ -192,6 +207,42 @@ function renderHero() {
     .filter(Boolean)
     .join(" | ");
   renderHeroNightScores();
+}
+
+function renderHeroScoreRadar(best, rows) {
+  if (!elements.heroScorePanel) return;
+
+  if (!best?.best) {
+    const score = document.createElement("p");
+    score.className = "score-number";
+    score.textContent = "--";
+    const label = document.createElement("p");
+    label.className = "score-label";
+    label.textContent = "observing score";
+    elements.heroScorePanel.replaceChildren(score, label);
+    return;
+  }
+
+  const slot = {
+    ...best.best.slot,
+    score: best.best.score,
+    components: scoreComponentsForSlot(best.best.slot, state.forecast, rows)
+  };
+  const score = Math.round(scoreFromComponents(slot.components));
+  slot.score = score;
+
+  const chart = document.createElement("div");
+  chart.className = "hero-radar";
+  chart.tabIndex = 0;
+  chart.setAttribute("aria-label", `Best conditions ${formatSlot(slot)}, composite score ${score}`);
+  setNightScoreRadar(chart, slot, { compact: true });
+  chart.appendChild(nightScoreRadarSvg(slot.components, { className: "hero-radar-chart", centerScore: score }));
+
+  const caption = document.createElement("p");
+  caption.className = "hero-radar-caption";
+  caption.textContent = `Best conditions: ${formatSlot(slot)}`;
+
+  elements.heroScorePanel.replaceChildren(chart, caption);
 }
 
 function renderHeroNightScores() {
@@ -205,8 +256,7 @@ function renderHeroNightScores() {
   }
 
   const heading = document.createElement("div");
-  heading.className = "hero-night-heading has-tooltip";
-  setTooltip(heading, compositeScoreTooltip());
+  heading.className = "hero-night-heading";
   const title = document.createElement("p");
   title.textContent = "Night scores";
   const range = document.createElement("p");
@@ -224,10 +274,14 @@ function renderHeroNightScores() {
 function nightScoreGroups(forecast, rows) {
   const nightSlots = forecast.timeSlots
     .filter((slot) => isNightSlot(slot, forecast.rows))
-    .map((slot) => ({
-      ...slot,
-      score: Math.round(scoreForSlot(slot, forecast, rows))
-    }));
+    .map((slot) => {
+      const components = scoreComponentsForSlot(slot, forecast, rows);
+      return {
+        ...slot,
+        components,
+        score: Math.round(scoreFromComponents(components))
+      };
+    });
 
   const groups = [];
   let current = [];
@@ -247,10 +301,10 @@ function nightScoreGroups(forecast, rows) {
 
 function nightScoreCard(slots, highestPeak) {
   const card = document.createElement("article");
-  card.className = "night-score-card has-tooltip";
+  card.className = "night-score-card";
   card.tabIndex = 0;
-  setTooltip(card, compositeScoreTooltip());
   const peak = slots.slice().sort((left, right) => right.score - left.score)[0];
+  setNightScoreRadar(card, peak);
   card.classList.toggle("is-best", peak.score === highestPeak);
 
   const header = document.createElement("div");
@@ -351,11 +405,11 @@ function nightScoreSvg(slots) {
 
   slots.forEach((slot, index) => {
     const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    dot.setAttribute("class", slot.score === peakScore ? "night-score-dot is-peak has-tooltip" : "night-score-dot has-tooltip");
+    dot.setAttribute("class", slot.score === peakScore ? "night-score-dot is-peak" : "night-score-dot");
     dot.setAttribute("cx", String(xFor(index)));
     dot.setAttribute("cy", String(yFor(slot.score)));
     dot.setAttribute("r", slot.score === peakScore ? "4.5" : "3.6");
-    setTooltip(dot, `${formatSlot(slot)}: ${slot.score}. ${compositeScoreTooltip()}`);
+    setNightScoreRadar(dot, slot);
     svg.appendChild(dot);
   });
 
@@ -364,10 +418,6 @@ function nightScoreSvg(slots) {
 
 function maxNightScore(slots) {
   return Math.max(...slots.map((slot) => slot.score));
-}
-
-function compositeScoreTooltip() {
-  return "Composite score weights: cloud cover 28%, ECMWF cloud 14%, transparency 20%, seeing 16%, darkness 12%, smoke 4%, wind 4%, humidity 2%. Higher is better.";
 }
 
 function nightLabel(slots) {
@@ -1200,11 +1250,29 @@ function observingContext() {
 }
 
 function scoreForSlot(slot, forecast, rows) {
+  return scoreFromComponents(scoreComponentsForSlot(slot, forecast, rows));
+}
+
+function scoreComponentsForSlot(slot, forecast, rows) {
   const entries = entriesAtKey(rows, slot.key);
-  return Object.entries(rowWeights).reduce((sum, [id, weight]) => {
-    const entry = id === "darkness" ? darknessForSlot(slot, forecast.rows) : entries[id];
-    return sum + (entry?.score || 0) * weight;
-  }, 0);
+  return scoreComponentMeta.map((component) => {
+    const entry = component.id === "darkness" ? darknessForSlot(slot, forecast.rows) : entries[component.id];
+    const rawScore = Math.max(0, Math.min(100, Number(entry?.score ?? 0) || 0));
+    const score = Math.round(rawScore);
+    const weight = rowWeights[component.id] || 0;
+    return {
+      ...component,
+      entry,
+      score,
+      weight,
+      contribution: rawScore * weight,
+      value: entry?.value || "Unavailable"
+    };
+  });
+}
+
+function scoreFromComponents(components) {
+  return components.reduce((sum, component) => sum + component.contribution, 0);
 }
 
 function findBestWindow(forecast, rows) {
@@ -1359,9 +1427,296 @@ function syncGraphToggle() {
   elements.graphToggle.closest(".switch-control")?.classList.toggle("is-checked", state.graphMode);
 }
 
+function setNightScoreRadar(element, slot, options = {}) {
+  if (!slot?.components?.length) return;
+
+  element.classList.add("has-radar");
+  element.removeAttribute("title");
+  element.setAttribute("aria-label", `${formatSlot(slot)} score ${Math.round(slot.score)} component radar`);
+  nightScoreRadarData.set(element, { slot, compact: Boolean(options.compact) });
+}
+
 function setTooltip(element, text) {
   element.dataset.tooltip = text;
   element.removeAttribute("title");
+}
+
+function installNightScoreRadarPopover() {
+  const popover = document.createElement("div");
+  popover.className = "radar-popover";
+  popover.setAttribute("role", "tooltip");
+  document.body.appendChild(popover);
+
+  let activeTarget = null;
+
+  function radarTarget(event) {
+    if (!(event.target instanceof Element)) return null;
+    const target = event.target.closest(".has-radar");
+    return target && nightScoreRadarData.has(target) ? target : null;
+  }
+
+  function show(target, x, y) {
+    const data = nightScoreRadarData.get(target);
+    if (!data?.slot) return;
+
+    activeTarget?.classList.remove("is-radar-active");
+    activeTarget = target;
+    activeTarget.classList.add("is-radar-active");
+    target.removeAttribute("title");
+    popover.replaceChildren(data.compact ? compactRadarContent(data.slot) : nightScoreRadarContent(data.slot));
+    popover.classList.add("is-visible");
+    popover.style.left = "0px";
+    popover.style.top = "0px";
+    position(x, y);
+  }
+
+  function position(x, y) {
+    if (!activeTarget) return;
+
+    const margin = 12;
+    const offset = 18;
+    const rect = popover.getBoundingClientRect();
+    let left = x + offset;
+    let top = y + offset;
+
+    if (left + rect.width + margin > window.innerWidth) {
+      left = x - rect.width - offset;
+    }
+    if (top + rect.height + margin > window.innerHeight) {
+      top = y - rect.height - offset;
+    }
+
+    popover.style.left = `${Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin))}px`;
+    popover.style.top = `${Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin))}px`;
+  }
+
+  function hide() {
+    activeTarget?.classList.remove("is-radar-active");
+    activeTarget = null;
+    popover.classList.remove("is-visible");
+  }
+
+  document.addEventListener("pointerover", (event) => {
+    const target = radarTarget(event);
+    if (!target || target === activeTarget) return;
+    show(target, event.clientX, event.clientY);
+  });
+
+  document.addEventListener("pointermove", (event) => {
+    if (activeTarget) position(event.clientX, event.clientY);
+  });
+
+  document.addEventListener("pointerout", (event) => {
+    if (!activeTarget) return;
+    if (event.relatedTarget instanceof Node && activeTarget.contains(event.relatedTarget)) return;
+    hide();
+  });
+
+  document.addEventListener("focusin", (event) => {
+    const target = radarTarget(event);
+    if (!target) return;
+
+    const rect = target.getBoundingClientRect();
+    show(target, rect.left + rect.width / 2, rect.top + rect.height);
+  });
+
+  document.addEventListener("focusout", hide);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hide();
+  });
+  window.addEventListener("scroll", hide, true);
+  window.addEventListener("resize", hide);
+}
+
+function nightScoreRadarContent(slot) {
+  const content = document.createElement("div");
+  content.className = "radar-popover-content";
+
+  const header = document.createElement("div");
+  header.className = "radar-popover-header";
+
+  const title = document.createElement("div");
+  title.className = "radar-popover-title";
+  const time = document.createElement("p");
+  time.textContent = formatSlot(slot);
+  const subtitle = document.createElement("p");
+  subtitle.textContent = "Component scores";
+  title.append(time, subtitle);
+
+  const score = document.createElement("p");
+  score.className = "radar-popover-score";
+  score.textContent = String(Math.round(slot.score));
+  header.append(title, score);
+
+  const body = document.createElement("div");
+  body.className = "radar-popover-body";
+  body.append(nightScoreRadarSvg(slot.components), nightScoreRadarLegend(slot.components));
+
+  const meta = document.createElement("p");
+  meta.className = "radar-popover-meta";
+  meta.textContent = "Scores are 0-100; listed weights determine the composite.";
+
+  content.append(header, body, meta);
+  return content;
+}
+
+function compactRadarContent(slot) {
+  const content = document.createElement("div");
+  content.className = "radar-popover-content radar-popover-content-compact";
+
+  const header = document.createElement("div");
+  header.className = "radar-popover-header";
+
+  const title = document.createElement("div");
+  title.className = "radar-popover-title";
+  const time = document.createElement("p");
+  time.textContent = `Best conditions: ${formatSlot(slot)}`;
+  const subtitle = document.createElement("p");
+  subtitle.textContent = "Component breakdown";
+  title.append(time, subtitle);
+
+  const score = document.createElement("p");
+  score.className = "radar-popover-score";
+  score.textContent = String(Math.round(slot.score));
+  header.append(title, score);
+
+  const body = document.createElement("div");
+  body.className = "radar-popover-body is-compact";
+  body.appendChild(nightScoreRadarLegend(slot.components));
+
+  const meta = document.createElement("p");
+  meta.className = "radar-popover-meta";
+  meta.textContent = "Scores are 0-100; listed weights determine the composite.";
+
+  content.append(header, body, meta);
+  return content;
+}
+
+function nightScoreRadarLegend(components) {
+  const legend = document.createElement("div");
+  legend.className = "radar-legend";
+
+  components.forEach((component) => {
+    const row = document.createElement("div");
+    row.className = "radar-legend-row";
+
+    const swatch = document.createElement("span");
+    swatch.className = "radar-legend-swatch";
+    swatch.style.setProperty("--component-color", component.color);
+
+    const text = document.createElement("span");
+    text.className = "radar-legend-text";
+    const label = document.createElement("span");
+    label.className = "radar-legend-label";
+    label.textContent = component.label;
+    const detail = document.createElement("span");
+    detail.className = "radar-legend-detail";
+    detail.textContent = component.value;
+    text.append(label, detail);
+
+    const numbers = document.createElement("span");
+    numbers.className = "radar-legend-numbers";
+    const value = document.createElement("span");
+    value.className = "radar-legend-value";
+    value.textContent = String(component.score);
+    const weight = document.createElement("span");
+    weight.className = "radar-legend-weight";
+    weight.textContent = `${Math.round(component.weight * 100)}%`;
+    numbers.append(value, weight);
+
+    row.append(swatch, text, numbers);
+    legend.appendChild(row);
+  });
+
+  return legend;
+}
+
+function nightScoreRadarSvg(components, options = {}) {
+  const size = 172;
+  const center = size / 2;
+  const radius = 68;
+  const count = components.length;
+  const valuePoints = components.map((component, index) =>
+    radarPoint(index, count, center, radius * (Math.max(0, Math.min(100, component.score)) / 100))
+  );
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", options.className || "night-radar-chart");
+  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  svg.setAttribute("aria-hidden", "true");
+
+  [0.25, 0.5, 0.75, 1].forEach((scale) => {
+    const ring = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    ring.setAttribute("class", "radar-grid-ring");
+    ring.setAttribute(
+      "points",
+      polygonPoints(components.map((_, index) => radarPoint(index, count, center, radius * scale)))
+    );
+    svg.appendChild(ring);
+  });
+
+  components.forEach((component, index) => {
+    const [x, y] = radarPoint(index, count, center, radius);
+    const axis = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    axis.setAttribute("class", "radar-axis");
+    axis.setAttribute("x1", String(center));
+    axis.setAttribute("y1", String(center));
+    axis.setAttribute("x2", x.toFixed(2));
+    axis.setAttribute("y2", y.toFixed(2));
+    axis.style.stroke = component.color;
+    svg.appendChild(axis);
+  });
+
+  components.forEach((component, index) => {
+    const nextPoint = valuePoints[(index + 1) % count];
+    const slice = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    slice.setAttribute("class", "radar-slice");
+    slice.setAttribute("points", polygonPoints([[center, center], valuePoints[index], nextPoint]));
+    slice.style.fill = component.color;
+    svg.appendChild(slice);
+  });
+
+  const outline = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  outline.setAttribute("class", "radar-outline");
+  outline.setAttribute("points", polygonPoints(valuePoints));
+  svg.appendChild(outline);
+
+  valuePoints.forEach(([x, y], index) => {
+    const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    point.setAttribute("class", "radar-point");
+    point.setAttribute("cx", x.toFixed(2));
+    point.setAttribute("cy", y.toFixed(2));
+    point.setAttribute("r", "3.6");
+    point.style.fill = components[index].color;
+    svg.appendChild(point);
+  });
+
+  if (Number.isFinite(options.centerScore)) {
+    const centerBack = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    centerBack.setAttribute("class", "radar-center-backdrop");
+    centerBack.setAttribute("cx", String(center));
+    centerBack.setAttribute("cy", String(center));
+    centerBack.setAttribute("r", "24");
+    svg.appendChild(centerBack);
+
+    const centerText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    centerText.setAttribute("class", "radar-center-score");
+    centerText.setAttribute("x", String(center));
+    centerText.setAttribute("y", String(center));
+    centerText.textContent = String(Math.round(options.centerScore));
+    svg.appendChild(centerText);
+  }
+
+  return svg;
+}
+
+function radarPoint(index, count, center, distance) {
+  const angle = -Math.PI / 2 + (index * Math.PI * 2) / count;
+  return [center + Math.cos(angle) * distance, center + Math.sin(angle) * distance];
+}
+
+function polygonPoints(points) {
+  return points.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ");
 }
 
 function installFloatingTooltips() {

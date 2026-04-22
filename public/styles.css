@@ -273,8 +273,10 @@ main > * {
 
 .hero-score {
   align-self: start;
-  min-width: 168px;
-  text-align: right;
+  display: grid;
+  justify-items: center;
+  min-width: 190px;
+  text-align: center;
 }
 
 .score-number {
@@ -291,6 +293,40 @@ main > * {
   font-size: 0.86rem;
   font-weight: 720;
   text-transform: uppercase;
+}
+
+.hero-radar {
+  display: grid;
+  place-items: center;
+  width: 188px;
+  height: 188px;
+  border-radius: 50%;
+  cursor: help;
+}
+
+.hero-radar-chart {
+  display: block;
+  width: 188px;
+  height: 188px;
+  overflow: visible;
+}
+
+.hero-radar:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 4px;
+}
+
+.hero-radar.is-radar-active .hero-radar-chart {
+  filter: drop-shadow(0 0 12px rgba(157, 227, 255, 0.42));
+}
+
+.hero-radar-caption {
+  width: min(210px, 100%);
+  margin: 6px 0 0;
+  color: rgba(255, 250, 242, 0.78);
+  font-size: 0.78rem;
+  font-weight: 780;
+  line-height: 1.25;
 }
 
 .hero-meta {
@@ -357,6 +393,13 @@ main > * {
   box-shadow:
     inset 0 0 0 1px rgba(255, 250, 242, 0.12),
     0 12px 30px rgba(255, 209, 102, 0.12);
+}
+
+.night-score-card.is-radar-active {
+  border-color: rgba(157, 227, 255, 0.72);
+  box-shadow:
+    inset 0 0 0 1px rgba(157, 227, 255, 0.18),
+    0 12px 30px rgba(4, 8, 20, 0.2);
 }
 
 .night-score-header,
@@ -440,12 +483,24 @@ main > * {
   fill: rgba(255, 250, 242, 0.98);
   stroke: rgba(26, 41, 74, 0.74);
   stroke-width: 1.5;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    filter 120ms ease,
+    transform 120ms ease;
   vector-effect: non-scaling-stroke;
 }
 
 .night-score-dot.is-peak {
   fill: #ffe3a3;
   stroke: rgba(26, 41, 74, 0.9);
+}
+
+.night-score-dot.is-radar-active {
+  filter: drop-shadow(0 0 6px rgba(157, 227, 255, 0.75));
+  stroke: rgba(157, 227, 255, 0.98);
+  stroke-width: 2.2;
+  transform: scale(1.65);
 }
 
 .night-score-peak-line {
@@ -1046,6 +1101,10 @@ main > * {
   position: relative;
 }
 
+.has-radar {
+  cursor: help;
+}
+
 .floating-tooltip {
   position: fixed;
   left: 0;
@@ -1074,6 +1133,203 @@ main > * {
 .floating-tooltip.is-visible {
   opacity: 1;
   transform: translateY(0);
+}
+
+.radar-popover {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10001;
+  width: min(380px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius);
+  background: rgba(12, 18, 31, 0.97);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+  color: var(--text);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(5px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.radar-popover.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.radar-popover-content {
+  display: grid;
+  gap: 10px;
+}
+
+.radar-popover-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.radar-popover-title p,
+.radar-popover-score,
+.radar-popover-meta {
+  margin-bottom: 0;
+}
+
+.radar-popover-title p:first-child {
+  color: rgba(255, 250, 242, 0.94);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.radar-popover-title p:last-child,
+.radar-popover-meta {
+  color: rgba(255, 250, 242, 0.58);
+  font-size: 0.68rem;
+  font-weight: 720;
+}
+
+.radar-popover-score {
+  min-width: 42px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 250, 242, 0.96);
+  font-size: 1.1rem;
+  font-weight: 820;
+  line-height: 1;
+  text-align: center;
+}
+
+.radar-popover-body {
+  display: grid;
+  grid-template-columns: 156px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.radar-popover-body.is-compact {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.night-radar-chart {
+  display: block;
+  width: 156px;
+  height: 156px;
+}
+
+.radar-grid-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.radar-axis {
+  opacity: 0.48;
+  stroke-linecap: round;
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.radar-slice {
+  fill-opacity: 0.34;
+}
+
+.radar-outline {
+  fill: none;
+  stroke: rgba(255, 250, 242, 0.92);
+  stroke-linejoin: round;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.radar-point {
+  stroke: rgba(12, 18, 31, 0.84);
+  stroke-width: 1.3;
+  vector-effect: non-scaling-stroke;
+}
+
+.radar-center-backdrop {
+  fill: rgba(12, 18, 31, 0.76);
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 1;
+}
+
+.radar-center-score {
+  fill: rgba(255, 250, 242, 0.98);
+  font-size: 1.85rem;
+  font-weight: 820;
+  dominant-baseline: central;
+  paint-order: stroke;
+  stroke: rgba(12, 18, 31, 0.48);
+  stroke-width: 2;
+  text-anchor: middle;
+}
+
+.radar-legend {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.radar-legend-row {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+}
+
+.radar-legend-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--component-color);
+}
+
+.radar-legend-text,
+.radar-legend-numbers {
+  display: grid;
+  min-width: 0;
+}
+
+.radar-legend-label {
+  color: rgba(255, 250, 242, 0.88);
+  font-size: 0.68rem;
+  font-weight: 780;
+  line-height: 1.05;
+}
+
+.radar-legend-detail {
+  color: rgba(255, 250, 242, 0.52);
+  font-size: 0.6rem;
+  font-weight: 660;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-legend-numbers {
+  justify-items: end;
+}
+
+.radar-legend-value {
+  color: rgba(255, 250, 242, 0.94);
+  font-size: 0.74rem;
+  font-weight: 820;
+  line-height: 1.05;
+}
+
+.radar-legend-weight {
+  color: rgba(255, 250, 242, 0.48);
+  font-size: 0.58rem;
+  font-weight: 760;
+  line-height: 1.05;
 }
 
 .legend-panel {
@@ -1163,7 +1419,8 @@ main > * {
   }
 
   .hero-score {
-    text-align: left;
+    justify-items: start;
+    text-align: center;
   }
 
   .summary-grid,
