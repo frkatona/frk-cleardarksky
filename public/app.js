@@ -4,7 +4,8 @@ const state = {
   mode: "all",
   graphMode: new URLSearchParams(window.location.search).get("graphs") === "1",
   experience: new URLSearchParams(window.location.search).get("view") === "model" ? "model" : "clear",
-  modelLocation: localStorage.getItem("akClearSkyModelLocation") || "State College, PA"
+  modelLocation: localStorage.getItem("akClearSkyModelLocation") || "State College, PA",
+  militaryTime: false
 };
 
 const elements = {
@@ -14,6 +15,7 @@ const elements = {
   sourceLink: document.querySelector("#sourceLink"),
   refreshButton: document.querySelector("#refreshButton"),
   experienceToggle: document.querySelector("#experienceToggle"),
+  militaryTimeToggle: document.querySelector("#militaryTimeToggle"),
   graphToggle: document.querySelector("#graphToggle"),
   weatherHero: document.querySelector("#weatherHero"),
   heroScorePanel: document.querySelector(".hero-score"),
@@ -61,6 +63,7 @@ const scoreComponentMeta = [
 ];
 
 const nightScoreRadarData = new WeakMap();
+let clearHeroFitFrame = 0;
 
 document.querySelectorAll(".segment").forEach((button) => {
   button.addEventListener("click", () => {
@@ -74,8 +77,10 @@ document.querySelectorAll(".segment").forEach((button) => {
 
 elements.graphToggle.checked = state.graphMode;
 elements.experienceToggle.checked = state.experience === "model";
+elements.militaryTimeToggle.checked = state.militaryTime;
 elements.modelLocationInput.value = state.modelLocation;
 syncGraphToggle();
+syncMilitaryTimeToggle();
 syncExperienceVisibility();
 
 elements.refreshButton.addEventListener("click", () => {
@@ -96,11 +101,19 @@ elements.graphToggle.addEventListener("change", () => {
   renderForecast();
 });
 
+elements.militaryTimeToggle.addEventListener("change", () => {
+  state.militaryTime = elements.militaryTimeToggle.checked;
+  syncMilitaryTimeToggle();
+  renderHourly();
+  renderForecast();
+});
+
 elements.modelLocationForm.addEventListener("submit", (event) => {
   event.preventDefault();
   loadPublicModel(true);
 });
 
+window.addEventListener("resize", scheduleClearHeroFit);
 installFloatingTooltips();
 installNightScoreRadarPopover();
 activateExperience(state.experience);
@@ -260,6 +273,36 @@ function renderHero() {
   elements.weatherHero.dataset.quality = quality;
   renderHeroScoreRadar(best, rows);
   renderHeroNightScores();
+  scheduleClearHeroFit();
+}
+
+function scheduleClearHeroFit() {
+  cancelAnimationFrame(clearHeroFitFrame);
+  clearHeroFitFrame = requestAnimationFrame(fitClearHeroAboveFold);
+}
+
+function fitClearHeroAboveFold() {
+  const hero = elements.weatherHero;
+  if (!hero || state.experience !== "clear" || hero.hidden) return;
+
+  hero.style.setProperty("--clear-hero-fit", "1");
+
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  const viewportMargin = 8;
+  let rect = hero.getBoundingClientRect();
+  const availableHeight = viewportHeight - rect.top - viewportMargin;
+
+  if (availableHeight <= 0 || rect.height <= 0) return;
+
+  let fit = Math.min(1, Math.max(0.12, availableHeight / rect.height));
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    hero.style.setProperty("--clear-hero-fit", fit.toFixed(3));
+    rect = hero.getBoundingClientRect();
+
+    if (rect.bottom <= viewportHeight - viewportMargin || rect.height <= 0) break;
+    fit = Math.max(0.12, fit * (availableHeight / rect.height) * 0.98);
+  }
 }
 
 function renderHeroScoreRadar(best, rows) {
@@ -645,7 +688,7 @@ function renderHourly() {
 
     const time = document.createElement("p");
     time.className = "hour-time";
-    time.textContent = slot.time;
+    time.textContent = formatForecastTableTime(slot);
 
     const iconWrap = document.createElement("div");
     iconWrap.className = "hour-icon";
@@ -698,14 +741,16 @@ function renderForecast() {
 
     const time = document.createElement("span");
     time.className = "time-main";
-    time.textContent = slot.time;
+    time.textContent = formatForecastTableTime(slot);
 
     cell.append(date, time);
     fragment.appendChild(cell);
   });
 
-  rows.forEach((row) => {
+  rows.forEach((row, rowIndex) => {
+    const hasRowBreak = hasForecastRowBreakAfter(rows, rowIndex);
     const rowLabel = gridCell("row-label", "");
+    rowLabel.classList.toggle("forecast-row-break-after", hasRowBreak);
     rowLabel.appendChild(rowLabelIcon(row));
     const label = document.createElement("span");
     label.textContent = row.label;
@@ -714,12 +759,15 @@ function renderForecast() {
 
     const byKey = new Map(row.entries.map((entry) => [entry.key, entry]));
     if (state.graphMode && isGraphableRow(row)) {
-      fragment.appendChild(graphCell(row, visibleSlots, byKey));
+      const cell = graphCell(row, visibleSlots, byKey);
+      cell.classList.toggle("forecast-row-break-after", hasRowBreak);
+      fragment.appendChild(cell);
     } else {
       visibleSlots.forEach((slot, index) => {
         const entry = byKey.get(slot.key);
         const cell = entry ? forecastCell(entry, row) : emptyCell();
         cell.classList.toggle("is-day-start", isDayStartSlot(slot, index));
+        cell.classList.toggle("forecast-row-break-after", hasRowBreak);
         fragment.appendChild(cell);
       });
     }
@@ -732,6 +780,15 @@ function rowsWithDarknessFirst(rows) {
   const darkness = rows.find((row) => row.id === "darkness");
   const rest = rows.filter((row) => row.id !== "darkness");
   return darkness ? [darkness, ...rest] : rest;
+}
+
+function hasForecastRowBreakAfter(rows, index) {
+  const row = rows[index];
+  const nextRow = rows[index + 1];
+  if (!row || !nextRow) return false;
+
+  const pair = new Set([row.id, nextRow.id]);
+  return (pair.has("darkness") && pair.has("cloud")) || (row.id === "seeing" && nextRow.id === "smoke");
 }
 
 function isDayStartSlot(slot, index) {
@@ -1598,6 +1655,16 @@ function formatStandardTime(slot) {
   return `${standardHour}:${pad(minute)} ${suffix}`;
 }
 
+function formatForecastTableTime(slot) {
+  if (state.militaryTime) return slot.time;
+
+  const hour = Number(slot.hour);
+  const minute = Number(slot.minute || 0);
+  const suffix = hour < 12 ? "AM" : "PM";
+  const standardHour = hour % 12 || 12;
+  return minute ? `${standardHour}:${pad(minute)} ${suffix}` : `${standardHour} ${suffix}`;
+}
+
 function formatVisibilityMiles(value) {
   const miles = Number(value) / 1609.344;
   if (!Number.isFinite(miles)) return "--";
@@ -1649,6 +1716,10 @@ function setBusy(message) {
 
 function syncGraphToggle() {
   elements.graphToggle.closest(".switch-control")?.classList.toggle("is-checked", state.graphMode);
+}
+
+function syncMilitaryTimeToggle() {
+  elements.militaryTimeToggle.closest(".switch-control")?.classList.toggle("is-checked", state.militaryTime);
 }
 
 function syncExperienceVisibility() {
