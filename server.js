@@ -6,6 +6,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const PORT = Number(process.env.PORT || 4173);
 export const SOURCE_URL = "https://www.cleardarksky.com/c/StateCollegePAkey.html?1";
 const CACHE_MS = 5 * 60 * 1000;
+const PUBLIC_MODEL_CACHE_MS = 10 * 60 * 1000;
+const DEFAULT_PUBLIC_MODEL_LOCATION = "State College, PA";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,7 +33,61 @@ const rowMeta = [
   { id: "temperature", label: "Temperature", cadence: "hourly" }
 ];
 
+const usStateCodes = {
+  alabama: "al",
+  alaska: "ak",
+  arizona: "az",
+  arkansas: "ar",
+  california: "ca",
+  colorado: "co",
+  connecticut: "ct",
+  delaware: "de",
+  florida: "fl",
+  georgia: "ga",
+  hawaii: "hi",
+  idaho: "id",
+  illinois: "il",
+  indiana: "in",
+  iowa: "ia",
+  kansas: "ks",
+  kentucky: "ky",
+  louisiana: "la",
+  maine: "me",
+  maryland: "md",
+  massachusetts: "ma",
+  michigan: "mi",
+  minnesota: "mn",
+  mississippi: "ms",
+  missouri: "mo",
+  montana: "mt",
+  nebraska: "ne",
+  nevada: "nv",
+  "new hampshire": "nh",
+  "new jersey": "nj",
+  "new mexico": "nm",
+  "new york": "ny",
+  "north carolina": "nc",
+  "north dakota": "nd",
+  ohio: "oh",
+  oklahoma: "ok",
+  oregon: "or",
+  pennsylvania: "pa",
+  "rhode island": "ri",
+  "south carolina": "sc",
+  "south dakota": "sd",
+  tennessee: "tn",
+  texas: "tx",
+  utah: "ut",
+  vermont: "vt",
+  virginia: "va",
+  washington: "wa",
+  "west virginia": "wv",
+  wisconsin: "wi",
+  wyoming: "wy"
+};
+
 let forecastCache = null;
+const publicModelCache = new Map();
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -44,12 +100,20 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (requestUrl.pathname === "/api/public-model") {
+      const refresh = requestUrl.searchParams.get("refresh") === "1";
+      const location = requestUrl.searchParams.get("location") || DEFAULT_PUBLIC_MODEL_LOCATION;
+      const payload = await getPublicModelForecast(location, refresh);
+      sendJson(response, 200, payload);
+      return;
+    }
+
     await serveStatic(requestUrl.pathname, response);
   } catch (error) {
     console.error(error);
     if (!response.headersSent) {
       sendJson(response, 500, {
-        error: "Unable to load the Clear Sky forecast.",
+        error: "Unable to load forecast data.",
         detail: error instanceof Error ? error.message : String(error)
       });
     }
@@ -116,6 +180,347 @@ export async function getForecast(forceRefresh = false) {
   };
 
   return payload;
+}
+
+export async function getPublicModelForecast(locationQuery = DEFAULT_PUBLIC_MODEL_LOCATION, forceRefresh = false) {
+  const query = cleanText(locationQuery) || DEFAULT_PUBLIC_MODEL_LOCATION;
+  const cacheKey = query.toLowerCase();
+  const now = Date.now();
+  const cached = publicModelCache.get(cacheKey);
+  if (!forceRefresh && cached && now - cached.cachedAt < PUBLIC_MODEL_CACHE_MS) {
+    return cached.payload;
+  }
+
+  const location = await resolvePublicModelLocation(query);
+  const forecastUrl = publicModelForecastUrl(location);
+  const forecast = await fetchJson(forecastUrl, "Open-Meteo forecast");
+  const payload = publicModelPayload(query, location, forecast, forecastUrl);
+
+  publicModelCache.set(cacheKey, {
+    cachedAt: now,
+    payload
+  });
+
+  return payload;
+}
+
+async function resolvePublicModelLocation(query) {
+  const coordinates = parseCoordinateQuery(query);
+  if (coordinates) {
+    return {
+      name: `${coordinates.latitude.toFixed(3)}, ${coordinates.longitude.toFixed(3)}`,
+      label: `${coordinates.latitude.toFixed(3)}, ${coordinates.longitude.toFixed(3)}`,
+      latitude: coordinates.latitude,
+      longitude: coordinates.longitude,
+      elevation: null,
+      timezone: null,
+      country: null,
+      admin1: null,
+      geocodingUrl: null
+    };
+  }
+
+  let geocodingUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=en&format=json`;
+  let payload = await fetchJson(geocodingUrl, "Open-Meteo geocoding");
+  if (!payload.results?.length && query.includes(",")) {
+    const fallbackQuery = cleanText(query.split(",")[0]);
+    geocodingUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(fallbackQuery)}&count=5&language=en&format=json`;
+    payload = await fetchJson(geocodingUrl, "Open-Meteo geocoding");
+  }
+  const result = choosePublicLocationResult(payload.results, query);
+  if (!result) {
+    throw new Error(`No public geocoding result matched "${query}".`);
+  }
+
+  const parts = [result.name, result.admin1, result.country].filter(Boolean);
+  return {
+    name: result.name,
+    label: parts.join(", "),
+    latitude: Number(result.latitude),
+    longitude: Number(result.longitude),
+    elevation: Number.isFinite(Number(result.elevation)) ? Number(result.elevation) : null,
+    timezone: result.timezone || null,
+    country: result.country || null,
+    admin1: result.admin1 || null,
+    geocodingUrl
+  };
+}
+
+function choosePublicLocationResult(results = [], query) {
+  const candidates = Array.isArray(results) ? results : [];
+  if (!candidates.length) return null;
+
+  const qualifier = cleanText(String(query).split(",").slice(1).join(" ")).toLowerCase();
+  if (!qualifier) return candidates[0];
+
+  return (
+    candidates.find((candidate) => {
+      const stateCode = usStateCodes[cleanText(candidate.admin1).toLowerCase()];
+      return [candidate.admin1, candidate.country, candidate.country_code, stateCode]
+        .filter(Boolean)
+        .some((value) => cleanText(value).toLowerCase() === qualifier);
+    }) || candidates[0]
+  );
+}
+
+function publicModelForecastUrl(location) {
+  const params = new URLSearchParams({
+    latitude: String(location.latitude),
+    longitude: String(location.longitude),
+    timezone: "auto",
+    forecast_hours: "120",
+    temperature_unit: "fahrenheit",
+    wind_speed_unit: "mph",
+    precipitation_unit: "inch",
+    hourly: [
+      "temperature_2m",
+      "relative_humidity_2m",
+      "dew_point_2m",
+      "cloud_cover",
+      "cloud_cover_low",
+      "cloud_cover_mid",
+      "cloud_cover_high",
+      "visibility",
+      "wind_speed_10m",
+      "wind_gusts_10m",
+      "precipitation_probability",
+      "precipitation",
+      "weather_code",
+      "is_day"
+    ].join(",")
+  });
+  return `https://api.open-meteo.com/v1/forecast?${params}`;
+}
+
+async function fetchJson(url, label) {
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "AK-clear-sky-public-model/1.0"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`${label} responded with ${response.status}`);
+  }
+
+  const payload = await response.json();
+  if (payload?.error) {
+    throw new Error(payload.reason || `${label} returned an error.`);
+  }
+  return payload;
+}
+
+function publicModelPayload(query, location, forecast, forecastUrl) {
+  const hours = modelHours(forecast);
+  const nightHours = hours.filter((hour) => hour.isNight);
+  const candidates = nightHours.length ? nightHours : hours;
+  const best = candidates.slice().sort((left, right) => right.score - left.score)[0] || null;
+  const nights = groupModelNights(nightHours);
+
+  return {
+    title: `${location.label} Public Sky Model`,
+    query,
+    fetchedAt: new Date().toISOString(),
+    source: {
+      label: "Open-Meteo Forecast API and Geocoding API",
+      forecastUrl,
+      geocodingUrl: location.geocodingUrl,
+      docsUrl: "https://open-meteo.com/en/docs"
+    },
+    location: {
+      name: location.name,
+      label: location.label,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      elevation: location.elevation,
+      timezone: forecast.timezone || location.timezone,
+      utcOffsetSeconds: forecast.utc_offset_seconds
+    },
+    units: forecast.hourly_units || {},
+    best,
+    nights,
+    hours
+  };
+}
+
+function modelHours(forecast) {
+  const hourly = forecast.hourly || {};
+  return (hourly.time || []).map((time, index) => {
+    const [date, clock = "0:00"] = String(time).split("T");
+    const [hour = 0, minute = 0] = clock.split(":").map(Number);
+    const values = {
+      temperature: numberAt(hourly.temperature_2m, index),
+      humidity: numberAt(hourly.relative_humidity_2m, index),
+      dewPoint: numberAt(hourly.dew_point_2m, index),
+      cloudCover: numberAt(hourly.cloud_cover, index),
+      lowCloud: numberAt(hourly.cloud_cover_low, index),
+      midCloud: numberAt(hourly.cloud_cover_mid, index),
+      highCloud: numberAt(hourly.cloud_cover_high, index),
+      visibility: numberAt(hourly.visibility, index),
+      windSpeed: numberAt(hourly.wind_speed_10m, index),
+      windGust: numberAt(hourly.wind_gusts_10m, index),
+      precipitationProbability: numberAt(hourly.precipitation_probability, index),
+      precipitation: numberAt(hourly.precipitation, index),
+      weatherCode: numberAt(hourly.weather_code, index),
+      isDay: numberAt(hourly.is_day, index)
+    };
+    const components = modelComponents(values, hour);
+    const score = Math.round(scoreFromModelComponents(components));
+
+    return {
+      index,
+      key: time,
+      date,
+      time: `${hour}:${String(minute).padStart(2, "0")}`,
+      hour,
+      minute,
+      score,
+      isNight: modelIsNight(values, hour),
+      summary: modelHourSummary(values),
+      values,
+      components
+    };
+  });
+}
+
+function modelComponents(values, hour) {
+  const componentMeta = [
+    { id: "cloud", label: "Cloud cover", color: "#4e79a7", weight: 0.24, score: scorePercentInverse(values.cloudCover), value: `${round(values.cloudCover)}% total` },
+    { id: "highCloud", label: "High cloud", color: "#76b7b2", weight: 0.12, score: clamp(100 - values.highCloud * 0.75, 0, 100), value: `${round(values.highCloud)}% high` },
+    { id: "transparency", label: "Visibility", color: "#59a14f", weight: 0.18, score: scoreVisibility(values), value: formatVisibility(values.visibility) },
+    { id: "seeing", label: "Steadiness", color: "#b07aa1", weight: 0.14, score: scoreSeeing(values), value: `${round(values.windSpeed)} mph wind / ${round(values.windGust)} mph gust` },
+    { id: "darkness", label: "Darkness", color: "#edc948", weight: 0.12, score: scoreModelDarkness(values, hour), value: values.isDay === 1 ? "daylight" : "night" },
+    { id: "precipitation", label: "Dry odds", color: "#bab0ab", weight: 0.08, score: scoreDryOdds(values), value: `${round(values.precipitationProbability)}% precip` },
+    { id: "wind", label: "Wind", color: "#f28e2b", weight: 0.07, score: scoreWindValue(values.windSpeed), value: `${round(values.windSpeed)} mph` },
+    { id: "humidity", label: "Humidity", color: "#e15759", weight: 0.05, score: scoreHumidityValue(values.humidity), value: `${round(values.humidity)}%` }
+  ];
+
+  return componentMeta.map((component) => ({
+    ...component,
+    score: Math.round(clamp(component.score, 0, 100)),
+    contribution: clamp(component.score, 0, 100) * component.weight
+  }));
+}
+
+function scoreFromModelComponents(components) {
+  return components.reduce((sum, component) => sum + component.contribution, 0);
+}
+
+function scorePercentInverse(value) {
+  return clamp(100 - (Number.isFinite(value) ? value : 100), 0, 100);
+}
+
+function scoreVisibility(values) {
+  const miles = visibilityMiles(values.visibility);
+  const base = clamp(((miles - 3) / 12) * 100, 0, 100);
+  const humidityPenalty = values.humidity > 85 ? 12 : values.humidity > 75 ? 6 : 0;
+  const highCloudPenalty = values.highCloud > 60 ? 10 : values.highCloud > 35 ? 5 : 0;
+  return clamp(base - humidityPenalty - highCloudPenalty, 0, 100);
+}
+
+function scoreSeeing(values) {
+  const wind = Number.isFinite(values.windSpeed) ? values.windSpeed : 25;
+  const gust = Number.isFinite(values.windGust) ? values.windGust : wind;
+  return clamp(104 - wind * 2.3 - gust * 1.25, 0, 100);
+}
+
+function scoreModelDarkness(values, hour) {
+  if (values.isDay === 1) return 0;
+  if (hour >= 22 || hour <= 3) return 100;
+  if (hour >= 20 || hour <= 5) return 82;
+  return 58;
+}
+
+function scoreDryOdds(values) {
+  const probability = Number.isFinite(values.precipitationProbability) ? values.precipitationProbability : 0;
+  const amount = Number.isFinite(values.precipitation) ? values.precipitation : 0;
+  return clamp(100 - probability * 1.08 - amount * 220, 0, 100);
+}
+
+function scoreWindValue(value) {
+  if (value <= 5) return 100;
+  if (value <= 11) return 86;
+  if (value <= 16) return 70;
+  if (value <= 28) return 45;
+  if (value <= 45) return 20;
+  return 5;
+}
+
+function scoreHumidityValue(value) {
+  if (value < 70) return 95;
+  if (value < 80) return 72;
+  if (value < 90) return 42;
+  return 18;
+}
+
+function modelIsNight(values, hour) {
+  return values.isDay === 0 || hour >= 20 || hour <= 6;
+}
+
+function modelHourSummary(values) {
+  return [
+    `${round(values.cloudCover)}% cloud`,
+    `${formatVisibility(values.visibility)} visibility`,
+    `${round(values.humidity)}% humidity`,
+    `${round(values.windSpeed)} mph wind`
+  ].join(" | ");
+}
+
+function groupModelNights(nightHours) {
+  const groups = [];
+  let current = [];
+
+  nightHours.forEach((hour) => {
+    const previous = current[current.length - 1];
+    if (previous && hour.index - previous.index > 1) {
+      groups.push(modelNightGroup(current));
+      current = [];
+    }
+    current.push(hour);
+  });
+
+  if (current.length) groups.push(modelNightGroup(current));
+  return groups;
+}
+
+function modelNightGroup(hours) {
+  const peak = hours.slice().sort((left, right) => right.score - left.score)[0];
+  return {
+    label: hours[0].date === hours[hours.length - 1].date ? `${hours[0].date} night` : `${hours[0].date} to ${hours[hours.length - 1].date}`,
+    peak,
+    hours
+  };
+}
+
+function parseCoordinateQuery(query) {
+  const match = String(query).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (!match) return null;
+
+  const latitude = Number(match[1]);
+  const longitude = Number(match[2]);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+    return null;
+  }
+  return { latitude, longitude };
+}
+
+function numberAt(values, index) {
+  const value = Number(values?.[index]);
+  return Number.isFinite(value) ? value : Number.NaN;
+}
+
+function visibilityMiles(value) {
+  return Number.isFinite(value) ? value / 1609.344 : 0;
+}
+
+function formatVisibility(value) {
+  const miles = visibilityMiles(value);
+  return Number.isFinite(miles) ? `${miles.toFixed(miles >= 10 ? 0 : 1)} mi` : "Unavailable";
+}
+
+function round(value) {
+  return Number.isFinite(value) ? Math.round(value) : 0;
 }
 
 export function parseForecast(html) {

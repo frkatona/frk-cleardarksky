@@ -18,6 +18,13 @@
           <p class="source-line" id="sourceLine">Loading forecast...</p>
         </div>
         <div class="header-actions">
+          <label class="switch-control mode-switch" for="experienceToggle">
+            <input id="experienceToggle" type="checkbox">
+            <span class="switch-track" aria-hidden="true">
+              <span class="switch-thumb"></span>
+            </span>
+            <span class="switch-text">Public model</span>
+          </label>
           <button class="icon-button" id="refreshButton" type="button" title="Refresh forecast">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M21 12a9 9 0 0 1-15.3 6.4"></path>
@@ -32,12 +39,37 @@
       </header>
 
       <main>
-        <section class="weather-hero" id="weatherHero" aria-live="polite">
+        <section class="weather-hero" id="weatherHero" data-view="clear" aria-live="polite">
           <div class="hero-score">
             <p class="score-number" id="heroScore">--</p>
             <p class="score-label">observing score</p>
           </div>
           <div class="hero-night-scores" id="heroNightScores" aria-label="Night score forecast"></div>
+        </section>
+
+        <section class="model-view" id="modelView" data-view="model" hidden aria-label="Public model forecast">
+          <div class="model-controls">
+            <form class="location-form" id="modelLocationForm">
+              <label class="location-field" for="modelLocationInput">
+                <span>Location</span>
+                <input id="modelLocationInput" name="location" type="search" autocomplete="off" placeholder="City, state or lat, lon">
+              </label>
+              <button class="source-link" type="submit">Evaluate</button>
+            </form>
+            <p class="model-source" id="modelSourceLine">Open-Meteo public forecast model.</p>
+          </div>
+
+          <section class="model-hero" id="modelHero" aria-live="polite"></section>
+
+          <section class="model-night-panel" aria-label="Modeled night scores">
+            <div class="section-heading">
+              <h2>Modeled Night Scores</h2>
+              <p id="modelNightSummary"></p>
+            </div>
+            <div class="model-night-scores" id="modelNightScores"></div>
+          </section>
+
+          <section class="model-detail-grid" id="modelDetailGrid" aria-label="Public model details"></section>
         </section>
 
         <!-- <section class="hourly-panel" aria-label="Hourly forecast">
@@ -55,7 +87,7 @@
           <article class="summary-card loading"></article>
         </section> -->
 
-        <section class="toolbar" aria-label="Forecast controls">
+        <section class="toolbar" data-view="clear" aria-label="Forecast controls">
           <div class="control-cluster">
             <div class="segmented-control" role="group" aria-label="Visible hours">
               <button class="segment is-active" type="button" data-mode="all">All</button>
@@ -71,7 +103,7 @@
           </div>
         </section>
 
-        <section class="forecast-panel" aria-label="Hourly conditions grid">
+        <section class="forecast-panel" data-view="clear" aria-label="Hourly conditions grid">
           <div class="section-heading forecast-heading">
             <h2>Hourly Conditions</h2>
           </div>
@@ -87,7 +119,7 @@
           <div class="legend-grid" id="legendGrid"></div>
         </section> -->
 
-        <details class="original-chart" id="originalChartWrap">
+        <details class="original-chart" id="originalChartWrap" data-view="clear">
           <summary>Original chart image</summary>
           <a id="originalChartLink" href="#" target="_blank" rel="noreferrer">
             <img id="originalChart" alt="">

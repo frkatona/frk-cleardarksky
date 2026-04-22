@@ -1,7 +1,10 @@
 const state = {
   forecast: null,
+  publicModel: null,
   mode: "all",
-  graphMode: new URLSearchParams(window.location.search).get("graphs") === "1"
+  graphMode: new URLSearchParams(window.location.search).get("graphs") === "1",
+  experience: new URLSearchParams(window.location.search).get("view") === "model" ? "model" : "clear",
+  modelLocation: localStorage.getItem("akClearSkyModelLocation") || "State College, PA"
 };
 
 const elements = {
@@ -10,10 +13,19 @@ const elements = {
   sourceLine: document.querySelector("#sourceLine"),
   sourceLink: document.querySelector("#sourceLink"),
   refreshButton: document.querySelector("#refreshButton"),
+  experienceToggle: document.querySelector("#experienceToggle"),
   graphToggle: document.querySelector("#graphToggle"),
   weatherHero: document.querySelector("#weatherHero"),
   heroScorePanel: document.querySelector(".hero-score"),
   heroNightScores: document.querySelector("#heroNightScores"),
+  modelView: document.querySelector("#modelView"),
+  modelLocationForm: document.querySelector("#modelLocationForm"),
+  modelLocationInput: document.querySelector("#modelLocationInput"),
+  modelHero: document.querySelector("#modelHero"),
+  modelSourceLine: document.querySelector("#modelSourceLine"),
+  modelNightSummary: document.querySelector("#modelNightSummary"),
+  modelNightScores: document.querySelector("#modelNightScores"),
+  modelDetailGrid: document.querySelector("#modelDetailGrid"),
   hourlyStrip: document.querySelector("#hourlyStrip"),
   hourlySummary: document.querySelector("#hourlySummary"),
   summaryGrid: document.querySelector("#summaryGrid"),
@@ -22,6 +34,9 @@ const elements = {
   originalChart: document.querySelector("#originalChart"),
   originalChartLink: document.querySelector("#originalChartLink")
 };
+
+const clearViews = [...document.querySelectorAll('[data-view="clear"]')];
+const modelViews = [...document.querySelectorAll('[data-view="model"]')];
 
 const rowWeights = {
   cloud: 0.28,
@@ -58,10 +73,21 @@ document.querySelectorAll(".segment").forEach((button) => {
 });
 
 elements.graphToggle.checked = state.graphMode;
+elements.experienceToggle.checked = state.experience === "model";
+elements.modelLocationInput.value = state.modelLocation;
 syncGraphToggle();
+syncExperienceVisibility();
 
 elements.refreshButton.addEventListener("click", () => {
-  loadForecast(true);
+  if (state.experience === "model") {
+    loadPublicModel(true);
+  } else {
+    loadForecast(true);
+  }
+});
+
+elements.experienceToggle.addEventListener("change", () => {
+  activateExperience(elements.experienceToggle.checked ? "model" : "clear");
 });
 
 elements.graphToggle.addEventListener("change", () => {
@@ -70,9 +96,14 @@ elements.graphToggle.addEventListener("change", () => {
   renderForecast();
 });
 
+elements.modelLocationForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  loadPublicModel(true);
+});
+
 installFloatingTooltips();
 installNightScoreRadarPopover();
-loadForecast(false);
+activateExperience(state.experience);
 
 async function loadForecast(refresh) {
   setBusy(refresh ? "Refreshing chart data..." : "Fetching latest chart data...");
@@ -111,10 +142,60 @@ async function fetchForecast(refresh) {
   throw lastError || new Error("No forecast endpoint responded.");
 }
 
+function activateExperience(experience) {
+  state.experience = experience;
+  elements.experienceToggle.checked = experience === "model";
+  syncExperienceVisibility();
+
+  if (experience === "model") {
+    if (state.publicModel) {
+      renderPublicModel();
+    } else {
+      loadPublicModel(false);
+    }
+    return;
+  }
+
+  if (state.forecast) {
+    render();
+  } else {
+    loadForecast(false);
+  }
+}
+
+async function loadPublicModel(refresh) {
+  const location = cleanInput(elements.modelLocationInput.value) || state.modelLocation || "State College, PA";
+  state.modelLocation = location;
+  localStorage.setItem("akClearSkyModelLocation", location);
+  elements.modelLocationInput.value = location;
+  setBusy(refresh ? `Refreshing public model for ${location}...` : `Fetching public model for ${location}...`);
+
+  try {
+    state.publicModel = await fetchPublicModel(location, refresh);
+    renderPublicModel();
+  } catch (error) {
+    renderPublicModelError(error);
+  } finally {
+    elements.refreshButton.disabled = false;
+  }
+}
+
+async function fetchPublicModel(location, refresh) {
+  const params = new URLSearchParams({ location });
+  if (refresh) params.set("refresh", "1");
+  const response = await fetch(`api/public-model?${params}`, { cache: refresh ? "reload" : "default" });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(detail.detail || `Public model responded with ${response.status}`);
+  }
+  return response.json();
+}
+
 function render() {
   const forecast = state.forecast;
   elements.pageTitle.textContent = forecast.title.replace("Clear Sky Chart", "Clear Sky");
   elements.eyebrowSourceLink.href = forecast.sourceUrl;
+  elements.eyebrowSourceLink.textContent = "cleardarksky";
   elements.sourceLink.href = forecast.sourceUrl;
   updateSourceLine(forecast);
 
@@ -247,6 +328,140 @@ function renderHeroNightScores() {
   elements.heroNightScores.replaceChildren(heading, strip);
 }
 
+function renderPublicModel() {
+  const model = state.publicModel;
+  if (!model) return;
+
+  elements.pageTitle.textContent = `${model.location.label} Sky Model`;
+  elements.eyebrowSourceLink.href = model.source.docsUrl;
+  elements.eyebrowSourceLink.textContent = "Open-Meteo";
+  elements.sourceLink.href = model.source.forecastUrl;
+  elements.sourceLine.textContent = [
+    `Public model fetched ${formatDateTime(model.fetchedAt)}`,
+    `${model.location.latitude.toFixed(3)}, ${model.location.longitude.toFixed(3)}`,
+    model.location.timezone || null
+  ]
+    .filter(Boolean)
+    .join(" | ");
+  elements.modelLocationInput.value = state.modelLocation;
+  elements.modelSourceLine.textContent = `Sources: ${model.source.label}.`;
+
+  renderPublicModelHero(model);
+  renderPublicModelNights(model);
+  renderPublicModelDetails(model);
+}
+
+function renderPublicModelHero(model) {
+  const best = model.best;
+  elements.modelHero.replaceChildren();
+  if (!best) {
+    const empty = document.createElement("p");
+    empty.className = "model-empty";
+    empty.textContent = "No modeled night hours are available for this location.";
+    elements.modelHero.appendChild(empty);
+    return;
+  }
+
+  const quality = best.score >= 75 ? "good" : best.score >= 50 ? "mixed" : "poor";
+  elements.modelHero.dataset.quality = quality;
+
+  const scoreWrap = document.createElement("div");
+  scoreWrap.className = "model-hero-score";
+  const chart = document.createElement("div");
+  chart.className = "hero-radar";
+  chart.tabIndex = 0;
+  setNightScoreRadar(chart, best, { compact: true });
+  chart.appendChild(nightScoreRadarSvg(best.components, { className: "hero-radar-chart", centerScore: best.score }));
+
+  const caption = document.createElement("p");
+  caption.className = "hero-radar-caption";
+  const label = document.createElement("span");
+  label.textContent = "Best viewing:";
+  const time = document.createElement("span");
+  time.textContent = formatHeroViewingSlot(best);
+  caption.append(label, time);
+  scoreWrap.append(chart, caption);
+
+  const facts = document.createElement("div");
+  facts.className = "model-hero-facts";
+  [
+    ["Cloud", `${Math.round(best.values.cloudCover)}%`],
+    ["Visibility", formatVisibilityMiles(best.values.visibility)],
+    ["Humidity", `${Math.round(best.values.humidity)}%`],
+    ["Wind", `${Math.round(best.values.windSpeed)} mph`]
+  ].forEach(([labelText, valueText]) => {
+    const fact = document.createElement("div");
+    fact.className = "model-fact";
+    const factLabel = document.createElement("span");
+    factLabel.textContent = labelText;
+    const factValue = document.createElement("strong");
+    factValue.textContent = valueText;
+    fact.append(factLabel, factValue);
+    facts.appendChild(fact);
+  });
+
+  elements.modelHero.append(scoreWrap, facts);
+}
+
+function renderPublicModelNights(model) {
+  if (!elements.modelNightScores) return;
+
+  if (!model.nights?.length) {
+    elements.modelNightSummary.textContent = "No night hours in this forecast window.";
+    elements.modelNightScores.replaceChildren();
+    return;
+  }
+
+  elements.modelNightSummary.textContent = `${model.nights.length} modeled ${model.nights.length === 1 ? "night" : "nights"}`;
+  const highestPeak = Math.max(...model.nights.map((night) => maxNightScore(night.hours)));
+  const strip = document.createElement("div");
+  strip.className = "hero-night-strip model-night-strip";
+  strip.replaceChildren(...model.nights.map((night) => nightScoreCard(night.hours, highestPeak)));
+  elements.modelNightScores.replaceChildren(strip);
+}
+
+function renderPublicModelDetails(model) {
+  if (!elements.modelDetailGrid) return;
+  elements.modelDetailGrid.replaceChildren();
+
+  const best = model.best;
+  const componentCard = document.createElement("article");
+  componentCard.className = "model-detail-card";
+  const componentTitle = document.createElement("h2");
+  componentTitle.textContent = "Best Hour Components";
+  componentCard.appendChild(componentTitle);
+  if (best?.components?.length) {
+    componentCard.appendChild(nightScoreRadarLegend(best.components));
+  }
+
+  const sourceCard = document.createElement("article");
+  sourceCard.className = "model-detail-card";
+  const sourceTitle = document.createElement("h2");
+  sourceTitle.textContent = "Public Sources";
+  const sourceText = document.createElement("p");
+  sourceText.textContent = model.source.label;
+  const sourceMeta = document.createElement("p");
+  sourceMeta.textContent = `Forecast timezone ${model.location.timezone || "auto"}; elevation ${
+    Number.isFinite(model.location.elevation) ? `${Math.round(model.location.elevation)} m` : "unavailable"
+  }.`;
+  sourceCard.append(sourceTitle, sourceText, sourceMeta);
+
+  elements.modelDetailGrid.append(componentCard, sourceCard);
+}
+
+function renderPublicModelError(error) {
+  elements.sourceLine.textContent = "Public model fetch failed.";
+  elements.modelHero.replaceChildren();
+  const card = document.createElement("article");
+  card.className = "model-detail-card error-panel";
+  const title = document.createElement("h2");
+  title.textContent = "Public Model Error";
+  const detail = document.createElement("p");
+  detail.textContent = error instanceof Error ? error.message : String(error);
+  card.append(title, detail);
+  elements.modelHero.appendChild(card);
+}
+
 function nightScoreGroups(forecast, rows) {
   const nightSlots = forecast.timeSlots
     .filter((slot) => isNightSlot(slot, forecast.rows))
@@ -329,7 +544,7 @@ function nightScoreSvg(slots) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("class", "night-score-svg");
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
   [0, 50, 100].forEach((score) => {
     const guide = document.createElementNS("http://www.w3.org/2000/svg", "line");
@@ -1114,6 +1329,10 @@ function compactValue(value) {
     .trim();
 }
 
+function cleanInput(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
 function cloudDescription(percent, lower) {
   if (lower.includes("clear") || percent <= 0) return "Favorable; no cloud cover forecast.";
   if (percent <= 20) return "Mostly clear; good observing odds.";
@@ -1379,6 +1598,12 @@ function formatStandardTime(slot) {
   return `${standardHour}:${pad(minute)} ${suffix}`;
 }
 
+function formatVisibilityMiles(value) {
+  const miles = Number(value) / 1609.344;
+  if (!Number.isFinite(miles)) return "--";
+  return `${miles.toFixed(miles >= 10 ? 0 : 1)} mi`;
+}
+
 function formatDate(dateString) {
   const date = new Date(`${dateString}T12:00:00`);
   return new Intl.DateTimeFormat([], { weekday: "short", month: "short", day: "numeric" }).format(date);
@@ -1424,6 +1649,18 @@ function setBusy(message) {
 
 function syncGraphToggle() {
   elements.graphToggle.closest(".switch-control")?.classList.toggle("is-checked", state.graphMode);
+}
+
+function syncExperienceVisibility() {
+  const modelActive = state.experience === "model";
+  document.body.dataset.experience = state.experience;
+  elements.experienceToggle.closest(".switch-control")?.classList.toggle("is-checked", modelActive);
+  clearViews.forEach((view) => {
+    view.hidden = modelActive;
+  });
+  modelViews.forEach((view) => {
+    view.hidden = !modelActive;
+  });
 }
 
 function setNightScoreRadar(element, slot, options = {}) {
